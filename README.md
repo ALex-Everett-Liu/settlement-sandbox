@@ -1,6 +1,6 @@
 # settlement-sandbox
 
-三国题材的单机沙盘。设计文档在 vault 的 `game-202610/` 里，本目录只放代码。
+三国题材的单机沙盘。设计文档在 vault 的 `game-202610/` 里，进度与下一步见 [ROADMAP.md](ROADMAP.md)，本目录只放代码。
 
 ## 这个目录的特殊之处
 
@@ -14,7 +14,7 @@
 
 - **vault 里这一份是工作副本**，AI Assistant 只改这一份。
 - **复制出去的那一份**只用来 `npm install`、跑测试、运行程序、做 git 操作。
-- 复制方向是单向的：vault → 外部。复制时排除 `node_modules/`、`dist/`、`.git/`（前两个这一份里本来就不该有，最后一个永远不会在这一份里出现）。
+- 复制方向基本单向：vault → 外部。一个例外：`package.json` 的依赖段与 `package-lock.json` 是 npm 在外部那一份里写定的，每次装了新依赖就把这两个文件拷回 vault 一次，否则下次复制过去会把那几行依赖抹掉。复制时排除 `node_modules/`、`out/`、`dist/`、`.git/`。
 
 ## 写代码的约束：可擦除 TypeScript
 
@@ -31,6 +31,16 @@
 - 新写的代码注释用英文；已经写好的中文注释保持不动。
 - README 与设计文档用中文。
 
+## 若窗口起不来，报 `Electron uninstall`
+
+`electron` 的二进制不随 npm 注册表那条路走，是它自己的安装脚本另外下载的。依赖装完之后若 `node_modules/electron/dist/electron.exe` 不存在，手动跑一次：
+
+```
+node node_modules/electron/install.js
+```
+
+它会打印下载进度，下完就有二进制了。跑 `npm rebuild electron` 不一定有用——这一次它报了成功但什么都没下。
+
 ## 目录
 
 | 路径 | 内容 |
@@ -46,12 +56,12 @@
 
 ```
 npm install
-npm install -D electron electron-vite vite @vitejs/plugin-react @types/node @types/react @types/react-dom
+npm install -D "vite@^7" "@vitejs/plugin-react@^5.2.0" "electron-vite@^5.0.0" electron @types/react @types/react-dom
 npm install react react-dom
 npm run dev
 ```
 
-版本号故意不预填：上面那条命令会让 npm 解析出当前的版本再写进 `package.json`，比手写一个可能不存在的号稳。
+版本必须锁成这样，原因是 npm 会默认装最新的 Vite 8，而 `electron-vite` 的稳定版声明的 peer 只到 Vite 7（支持 Vite 8 的只有 6.0.0-beta.x）。`@vitejs/plugin-react@5.2.0` 同时接受 Vite 7 与 8，所以锁 Vite 7 能凑出一套全是正式版的组合。
 
 窗口起来之后：
 
