@@ -1,0 +1,17 @@
+{
+  "name": "settlement-sandbox",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "三国题材的单机沙盘：世界状态、结算引擎与外壳。",
+  "scripts": {
+    "selftest": "node tools/selftest.ts",
+    "selftest:db": "node tools/selftest-db.ts",
+    "probe:sqlite": "node tools/probe-sqlite.ts",
+    "typecheck": "tsc -p ."
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.8.0"
+  }
+}
