@@ -50,6 +50,8 @@ export function openWorldDb(path: string): DatabaseSync {
   db.exec(SCHEMA);
   const row = db.prepare('SELECT v FROM meta WHERE k = ?').get('schema_version') as { v?: string } | undefined;
   if (!row) {
+    // 全新的库：这里特意不写 initialized，主进程据此知道「这个库里还没有世界」，
+    // 交给界面去建最小世界。写过一次之后由 saveWorld 补上标记。
     db.prepare('INSERT INTO meta (k, v) VALUES (?, ?)').run('schema_version', String(SCHEMA_VERSION));
     db.prepare('INSERT INTO meta (k, v) VALUES (?, ?)').run('day', '0');
     db.prepare('INSERT INTO meta (k, v) VALUES (?, ?)').run('log_count', '0');
@@ -60,7 +62,18 @@ export function openWorldDb(path: string): DatabaseSync {
     throw new Error('存档的 schema 版本是 ' + String(row.v) + '，本程序认的是 ' + String(SCHEMA_VERSION));
   }
   if (from < SCHEMA_VERSION) migrate(db, path, from);
+  // 这个标记是后加的：以前写下的库没有它，但那些库里已经有世界了（哪怕是个空世界），
+  // 打开一次就补上，免得被当成新库、又被最小世界盖掉。
+  if (metaGet(db, 'initialized') === undefined) metaSet(db, 'initialized', '1');
   return db;
+}
+
+/**
+ * 库里有没有世界。只有全新的库才没有——一份零据点、零势力的世界也算有。
+ * 判据不能是「有没有据点」：那样一清空世界，下次开就被最小世界盖掉了。
+ */
+export function hasWorld(db: DatabaseSync): boolean {
+  return metaGet(db, 'initialized') === '1';
 }
 
 /**
@@ -216,6 +229,8 @@ export function saveWorld(db: DatabaseSync, world: World): void {
     metaSet(db, 'day', String(world.day));
     metaSet(db, 'log_count', String(world.log.length));
     metaSet(db, 'pending', JSON.stringify(world.pending));
+    // 写过一次世界就算「有世界」了，哪怕里面一个据点也没有。
+    metaSet(db, 'initialized', '1');
     db.exec('COMMIT');
   } catch (e) {
     db.exec('ROLLBACK');

@@ -21,7 +21,7 @@ function round1(v: number): number {
 const NO_PARENT = '（无）';
 
 /**
- * 删除按钮。要按两下：第一下把按钮换成「确认删除」，鼠标移开就收回。
+ * 删除按钮。要按两下：第一下把按钮换成「确认删除」，焦点离开就收回。
  * 挡路的情况由调用方判——按了第二下也可能什么也没删，说明行会写清楚挡在哪一条。
  */
 function DeleteButton({ what, onConfirm }: { what: string; onConfirm: () => void }) {
@@ -30,7 +30,9 @@ function DeleteButton({ what, onConfirm }: { what: string; onConfirm: () => void
     <button
       className={armed ? 'danger' : undefined}
       title={armed ? '再点一下就删掉' + what : '删掉' + what + '：要按两下'}
-      onMouseLeave={() => setArmed(false)}
+      // 收回的判据是焦点离开，不是鼠标移出按钮的框：字从「删除」变「确认删除」时框会变宽、
+      // 表格会重新分配列宽，鼠标一动没动框却变了，onMouseLeave 会被误判出来，刚点亮的「确认删除」当场被收回。
+      onBlur={() => setArmed(false)}
       onClick={() => {
         if (armed) {
           setArmed(false);

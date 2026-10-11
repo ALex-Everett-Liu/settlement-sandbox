@@ -6,9 +6,10 @@ import * as path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { DEFAULT_PARAMS } from '../src/engine/params.ts';
 import { tickDay } from '../src/engine/tick.ts';
-import { demoWorld } from '../src/engine/world.ts';
+import { demoWorld, emptyWorld } from '../src/engine/world.ts';
 import {
   fillParamsGaps,
+  hasWorld,
   loadParams,
   loadWorld,
   logCount,
@@ -160,6 +161,31 @@ check('升级前留了副本', fs.existsSync(path.join(dir, 'legacy-v1.v1-backup
 const keptDay = up.prepare('SELECT v FROM meta WHERE k = ?').get('day') as { v: string };
 check('day 没被动过', Number(keptDay.v) === 7, keptDay.v);
 up.close();
+
+console.log('\n== 空世界也算有世界 ==');
+// 判据不能是「有没有据点」：那样把世界清空之后，下次开就被最小世界盖掉了。
+const freshPath = path.join(dir, 'fresh.db');
+const fresh = openWorldDb(freshPath);
+check('全新的库还没有世界', !hasWorld(fresh));
+saveWorld(fresh, emptyWorld());
+check('空世界写进去之后就算有世界', hasWorld(fresh));
+check('空世界读回来是零据点', loadWorld(fresh).sites.length === 0);
+fresh.close();
+const freshAgain = openWorldDb(freshPath);
+check('重开这个库仍然算有世界', hasWorld(freshAgain));
+freshAgain.close();
+
+console.log('\n== 后加的标记会给老库补上 ==');
+// 造一份加这个标记之前写下的库：世界在，标记没有。
+const prePath = path.join(dir, 'pre-flag.db');
+const pre = openWorldDb(prePath);
+saveWorld(pre, demoWorld());
+pre.exec("DELETE FROM meta WHERE k = 'initialized'");
+pre.close();
+const preAgain = openWorldDb(prePath);
+check('老库打开一次就补上标记', hasWorld(preAgain));
+check('老库的世界没被动过', loadWorld(preAgain).sites.length === 2);
+preAgain.close();
 
 db.close();
 console.log('\n临时目录：' + dir);

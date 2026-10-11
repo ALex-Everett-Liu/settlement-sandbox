@@ -7,7 +7,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { DEFAULT_PARAMS } from '../engine/params.ts';
 import type { Params, World } from '../engine/types.ts';
 import { IPC } from '../shared/ipc.ts';
-import { fillParamsGaps, loadParams, loadWorld, openWorldDb, saveParams, saveWorld, writeSnapshot } from './db.ts';
+import { fillParamsGaps, hasWorld, loadParams, loadWorld, openWorldDb, saveParams, saveWorld, writeSnapshot } from './db.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -76,8 +76,9 @@ function registerIpc(): void {
     return dbFile;
   });
   ipcMain.handle(IPC.loadWorld, () => {
-    const w = loadWorld(ensureDb());
-    return w.sites.length === 0 ? null : w;
+    // 判据是「这个库里写过世界没有」，不是「有没有据点」：零据点的世界照样读得回来。
+    const d = ensureDb();
+    return hasWorld(d) ? loadWorld(d) : null;
   });
   ipcMain.handle(IPC.saveWorld, (_e, world: World) => {
     saveWorld(ensureDb(), world);
