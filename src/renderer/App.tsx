@@ -3,7 +3,7 @@ import { answerAsk } from '../engine/ask.ts';
 import { DEFAULT_PARAMS } from '../engine/params.ts';
 import { dayOfMonth, month, tickDay, year } from '../engine/tick.ts';
 import type { Link, Order, Params, Site, Theme, Unit, World } from '../engine/types.ts';
-import { addLink, addSite, demoWorld } from '../engine/world.ts';
+import { addLink, addSite, demoWorld, siteName } from '../engine/world.ts';
 import type { SandboxApi } from '../shared/ipc.ts';
 import { MapView } from './map.tsx';
 import { LinkTable, SiteTable, UnitTable } from './tables.tsx';
@@ -28,8 +28,8 @@ export function App() {
   const [view, setView] = useState<View>('sites');
   const [dbPath, setDbPath] = useState('（还不知道）');
   const [note, setNote] = useState('正在打开世界库…');
+  // 正在挑的起点据点：0 表示还没挑。挑法是在地图上点据点，见 MapView 的 onPickSite。
   const [linkFrom, setLinkFrom] = useState(0);
-  const [linkTo, setLinkTo] = useState(0);
   const worldRef = useRef<World | null>(null);
 
   // The theme rides in the params table, so it is stored in this world's database.
@@ -214,26 +214,63 @@ export function App() {
     [commit],
   );
 
-  /** 新增连接：两端各挑一个据点，地貌先留空，引擎走到它上面时会停下来问。 */
-  const addLinkBetween = useCallback(() => {
-    const w = worldRef.current;
-    if (!w) return;
-    if (linkFrom === 0 || linkTo === 0 || linkFrom === linkTo) {
-      setNote('新增连接要先挑两个不同的据点');
-      return;
-    }
-    const exists = w.links.some(
-      (l) => (l.a === linkFrom && l.b === linkTo) || (l.a === linkTo && l.b === linkFrom),
-    );
-    if (exists) {
-      setNote('这两座据点之间已经有连接了');
-      return;
-    }
-    const l = addLink(w, linkFrom, linkTo, 1, null);
-    commit(w);
-    setNote('新增连接 ' + String(l.id) + '：地貌未填，绕行系数 1.0');
-    if (api) void api.saveWorld(w);
-  }, [commit, linkFrom, linkTo]);
+  /** 在这两座据点之间加一条连接：地貌先留空，引擎走到它上面时会停下来问。 */
+  const addLinkBetween = useCallback(
+    (a: number, b: number) => {
+      const w = worldRef.current;
+      if (!w || a === 0 || b === 0 || a === b) {
+        setNote('新增连接要先挑两个不同的据点');
+        return;
+      }
+      const exists = w.links.some((l) => (l.a === a && l.b === b) || (l.a === b && l.b === a));
+      if (exists) {
+        setNote('这两座据点之间已经有连接了');
+        return;
+      }
+      const l = addLink(w, a, b, 1, null);
+      commit(w);
+      setNote('新增连接 ' + String(l.id) + '：' + siteName(w, a) + ' — ' + siteName(w, b) + '，地貌未填，绕行系数 1.0');
+      if (api) void api.saveWorld(w);
+    },
+    [commit],
+  );
+
+  /** 在地图上点了一个据点：还没有起点就是挑起点，已经有起点就是建连接，点的是起点本身就取消。 */
+  const pickSite = useCallback(
+    (id: number) => {
+      const w = worldRef.current;
+      if (!w) return;
+      if (linkFrom === 0) {
+        setLinkFrom(id);
+        setNote('起点：' + siteName(w, id) + ' · 再点一个据点作终点（Esc 或点空白处取消）');
+        return;
+      }
+      if (linkFrom === id) {
+        setLinkFrom(0);
+        setNote('起点取消了');
+        return;
+      }
+      addLinkBetween(linkFrom, id);
+      setLinkFrom(0);
+    },
+    [linkFrom, addLinkBetween],
+  );
+
+  const cancelPick = useCallback(() => {
+    if (linkFrom === 0) return;
+    setLinkFrom(0);
+    setNote('起点取消了');
+  }, [linkFrom]);
+
+  // 挑起点的时候按 Esc 取消。
+  useEffect(() => {
+    if (linkFrom === 0) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') cancelPick();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [linkFrom, cancelPick]);
 
   const calendar = world
     ? '第 ' + year(world, params) + ' 年 ' + month(world, params) + ' 月 ' + dayOfMonth(world, params) + ' 日'
@@ -281,24 +318,7 @@ export function App() {
               <span className="dim"> {counts[v.id]}</span>
             </button>
           ))}
-          <span className="dim small push">新增连接</span>
-          <select value={linkFrom} onChange={(e) => setLinkFrom(Number(e.target.value))}>
-            <option value={0}>从…</option>
-            {(world?.sites ?? []).map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-          <select value={linkTo} onChange={(e) => setLinkTo(Number(e.target.value))}>
-            <option value={0}>到…</option>
-            {(world?.sites ?? []).map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-          <button onClick={addLinkBetween}>建立</button>
+          <span className="dim small push">新增连接：在「地图」页签点两个据点</span>
           <button onClick={() => addSiteAt(Math.round(params.mapWidth / 2), Math.round(params.mapHeight / 2))}>
             新增据点
           </button>
@@ -311,13 +331,26 @@ export function App() {
         {!world ? (
           <p className="dim">世界还没读进来。</p>
         ) : view === 'sites' ? (
-          <SiteTable world={world} onEdit={editSite} />
+          <SiteTable
+            world={world}
+            onEdit={editSite}
+            startSite={linkFrom === 0 ? null : linkFrom}
+            onPick={pickSite}
+          />
         ) : view === 'units' ? (
           <UnitTable world={world} onEdit={editUnit} onOrder={editQueue} />
         ) : view === 'links' ? (
           <LinkTable world={world} onEdit={editLink} />
         ) : (
-          <MapView world={world} params={params} theme={theme} onAddSite={addSiteAt} />
+          <MapView
+            world={world}
+            params={params}
+            theme={theme}
+            startSite={linkFrom === 0 ? null : linkFrom}
+            onAddSite={addSiteAt}
+            onPickSite={pickSite}
+            onCancelPick={cancelPick}
+          />
         )}
 
         <section className="log">

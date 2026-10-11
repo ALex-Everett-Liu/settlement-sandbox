@@ -20,6 +20,7 @@ interface Palette {
   hill: number;
   link: number;
   site: number;
+  siteStart: number;
   label: number;
   unit: number;
 }
@@ -27,11 +28,11 @@ interface Palette {
 const PALETTES: Record<Theme, Palette> = {
   light: {
     grid: 0xe2e6eb, border: 0xc4cad3, sea: 0xd3e5f3, river: 0x9ec6e6, hill: 0xd9d3c7,
-    link: 0x8d949d, site: 0x8a5a12, label: 0x1b2027, unit: 0x1f6feb,
+    link: 0x8d949d, site: 0x8a5a12, siteStart: 0xd9480f, label: 0x1b2027, unit: 0x1f6feb,
   },
   dark: {
     grid: 0x1c2734, border: 0x2c3a4a, sea: 0x14303f, river: 0x2a5468, hill: 0x2a2f36,
-    link: 0x5f6d7b, site: 0xe8c07a, label: 0xd6e2ee, unit: 0x63a4ff,
+    link: 0x5f6d7b, site: 0xe8c07a, siteStart: 0xff8c42, label: 0xd6e2ee, unit: 0x63a4ff,
   },
 };
 
@@ -49,6 +50,8 @@ interface Scene {
   gfxToSite: Map<Graphics, number>;
   palette: Palette;
   zoom: number;
+  /** 正在挑的起点据点；没有就是 null。只影响据点圆点画成什么颜色。 */
+  start: number | null;
 }
 
 /** 线宽按屏幕像素折算成世界单位，缩放多大看起来都一样粗。 */
@@ -58,6 +61,25 @@ function px(scene: Scene, screenPx: number): number {
 
 function siteRadius(site: Site): number {
   return 3 + Math.min(5, site.scale) * 0.9;
+}
+
+/**
+ * 屏幕上这个点落在哪个据点的圆圈里，返回据点 id；没落在任何据点上就返回 0。
+ * 记号是按 1/zoom 反向缩放的，所以它在屏幕上量出来的半径就是 siteRadius 那个数。
+ */
+function siteAt(scene: Scene, world: World, sx: number, sy: number): number {
+  let best = 0;
+  let bestDistance = Infinity;
+  for (const s of world.sites) {
+    const cx = scene.root.position.x + s.x * scene.zoom;
+    const cy = scene.root.position.y - s.y * scene.zoom;
+    const d = Math.hypot(sx - cx, sy - cy);
+    if (d <= siteRadius(s) + 3 && d < bestDistance) {
+      bestDistance = d;
+      best = s.id;
+    }
+  }
+  return best;
 }
 
 /** 网格、边框、海、两条大河、几片山地。种子固定，重画多少次都是同一张。 */
@@ -155,7 +177,10 @@ function syncSites(scene: Scene, world: World): void {
       siteLabel.set(s.id, label);
     }
     g.clear();
-    g.circle(0, 0, siteRadius(s)).fill({ color: palette.site });
+    // 起点那个据点外面套一圈。两笔都是填充，宽度就是屏幕上固定的几像素，不随缩放变。
+    const r = siteRadius(s);
+    if (s.id === scene.start) g.circle(0, 0, r + 3.5).fill({ color: palette.siteStart });
+    g.circle(0, 0, r).fill({ color: palette.site });
     g.position.set(s.x, s.y);
     const label = siteLabel.get(s.id);
     if (label) {
@@ -235,14 +260,20 @@ export interface MapViewProps {
   world: World;
   params: Params;
   theme: Theme;
+  /** 正在挑的起点据点；没有就是 null。 */
+  startSite: number | null;
   onAddSite: (x: number, y: number) => void;
+  onPickSite: (id: number) => void;
+  onCancelPick: () => void;
 }
 
-export function MapView({ world, params, theme, onAddSite }: MapViewProps) {
+export function MapView({ world, params, theme, startSite, onAddSite, onPickSite, onCancelPick }: MapViewProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const sceneRef = useRef<Scene | null>(null);
   const hoverTimer = useRef<number | null>(null);
   const addSiteRef = useRef(onAddSite);
+  const pickRef = useRef(onPickSite);
+  const cancelRef = useRef(onCancelPick);
   const worldRef = useRef(world);
   const paramsRef = useRef(params);
   const [showTerrain, setShowTerrain] = useState(true);
@@ -250,6 +281,8 @@ export function MapView({ world, params, theme, onAddSite }: MapViewProps) {
   const [hover, setHover] = useState<{ site: Site; x: number; y: number } | null>(null);
 
   addSiteRef.current = onAddSite;
+  pickRef.current = onPickSite;
+  cancelRef.current = onCancelPick;
   worldRef.current = world;
   paramsRef.current = params;
 
@@ -272,6 +305,7 @@ export function MapView({ world, params, theme, onAddSite }: MapViewProps) {
       gfxToSite: new Map(),
       palette: PALETTES[theme],
       zoom: 1,
+      start: startSite,
     };
     sceneRef.current = scene;
 
@@ -285,6 +319,10 @@ export function MapView({ world, params, theme, onAddSite }: MapViewProps) {
         scene.app.stage.hitArea = scene.app.screen;
         scene.app.stage.addChild(scene.root);
         scene.root.addChild(scene.terrain, scene.grid, scene.links, scene.sites, scene.units);
+        // PixiJS 只把冒泡事件通知给 eventMode 是 static／dynamic 的对象，容器的默认值是 passive，
+        // 于是 notifyTarget 对 passive 的容器第一句就 return。想在这个容器上听子对象的
+        // pointerover／pointerout，它自己必须是 static。
+        scene.sites.eventMode = 'static';
 
         const width = scene.app.screen.width;
         const height = scene.app.screen.height;
@@ -313,6 +351,9 @@ export function MapView({ world, params, theme, onAddSite }: MapViewProps) {
         };
 
         let dragging = false;
+        let moved = false;
+        let downX = 0;
+        let downY = 0;
         let lastX = 0;
         let lastY = 0;
 
@@ -323,6 +364,9 @@ export function MapView({ world, params, theme, onAddSite }: MapViewProps) {
         };
         const onDown = (e: PointerEvent) => {
           dragging = true;
+          moved = false;
+          downX = e.clientX;
+          downY = e.clientY;
           lastX = e.clientX;
           lastY = e.clientY;
           canvas.setPointerCapture(e.pointerId);
@@ -334,6 +378,8 @@ export function MapView({ world, params, theme, onAddSite }: MapViewProps) {
             lastX = e.clientX;
             lastY = e.clientY;
           }
+          // 按下之后挪过 4 像素就算拖动，松手时不算一次点击。
+          if (Math.abs(e.clientX - downX) + Math.abs(e.clientY - downY) > 4) moved = true;
           const r = canvas.getBoundingClientRect();
           const p = toWorld(e.clientX - r.left, e.clientY - r.top);
           setCursor({ x: Math.round(p.x), y: Math.round(p.y) });
@@ -341,6 +387,12 @@ export function MapView({ world, params, theme, onAddSite }: MapViewProps) {
         const onUp = (e: PointerEvent) => {
           dragging = false;
           if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
+          if (moved) return;
+          // 一次点击：落在据点上就是挑它，落在空白处就是取消起点。
+          const r = canvas.getBoundingClientRect();
+          const id = siteAt(scene, worldRef.current, e.clientX - r.left, e.clientY - r.top);
+          if (id !== 0) pickRef.current(id);
+          else cancelRef.current();
         };
         const onDouble = (e: MouseEvent) => {
           const r = canvas.getBoundingClientRect();
@@ -362,11 +414,12 @@ export function MapView({ world, params, theme, onAddSite }: MapViewProps) {
           hoverTimer.current = window.setTimeout(() => {
             const s = worldRef.current.sites.find((x) => x.id === id);
             if (!s) return;
-            const rect = canvas.getBoundingClientRect();
+            // 浮层的 left／top 是相对 .mapwrap 算的；画布在 .mapwrap 里的位置用 offsetLeft／offsetTop 补上，
+            // 不能再减画布相对视口的 rect.left／rect.top。
             setHover({
               site: s,
-              x: scene.root.position.x + s.x * scene.zoom - rect.left,
-              y: scene.root.position.y - s.y * scene.zoom - rect.top,
+              x: canvas.offsetLeft + scene.root.position.x + s.x * scene.zoom,
+              y: canvas.offsetTop + scene.root.position.y - s.y * scene.zoom,
             });
           }, 200);
         });
@@ -416,6 +469,14 @@ export function MapView({ world, params, theme, onAddSite }: MapViewProps) {
     scene.terrain.visible = showTerrain;
   }, [showTerrain]);
 
+  // 起点的圈只改据点圆点画成什么颜色：重画据点那一层就够，不动地形与连线。
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+    scene.start = startSite;
+    syncSites(scene, worldRef.current);
+  }, [startSite]);
+
   return (
     <div className="mapwrap">
       <div className="map" ref={hostRef} />
@@ -423,7 +484,12 @@ export function MapView({ world, params, theme, onAddSite }: MapViewProps) {
         <label className="dim small">
           <input type="checkbox" checked={showTerrain} onChange={(e) => setShowTerrain(e.target.checked)} /> 生成的地形层
         </label>
-        <span className="dim small">滚轮缩放 · 拖动平移 · 双击新增据点</span>
+        <span className="dim small">滚轮缩放 · 拖动平移 · 双击空白处新增据点 · 单击据点挑起点／终点</span>
+        {startSite !== null ? (
+          <span className="dim small">
+            起点：{world.sites.find((s) => s.id === startSite)?.name ?? String(startSite)} · 再点一个据点作终点，Esc 或点空白处取消
+          </span>
+        ) : null}
         <span className="dim small">{cursor ? '坐标 ' + String(cursor.x) + ', ' + String(cursor.y) : '坐标 —'}</span>
       </div>
       {hover ? (

@@ -27,9 +27,13 @@ function round1(v: number): number {
 interface SiteTableProps {
   world: World;
   onEdit: (id: number, patch: Partial<Site>) => void;
+  /** 正在挑的起点据点；没有就是 null。 */
+  startSite: number | null;
+  /** 点「以此为起点」：接着在地图上挑终点，见设计 §六。 */
+  onPick: (id: number) => void;
 }
 
-export function SiteTable({ world, onEdit }: SiteTableProps) {
+export function SiteTable({ world, onEdit, startSite, onPick }: SiteTableProps) {
   if (world.sites.length === 0) return <p className="dim">还没有据点。</p>;
 
   return (
@@ -45,6 +49,7 @@ export function SiteTable({ world, onEdit }: SiteTableProps) {
           <th>粮草</th>
           <th>势力</th>
           <th>上级</th>
+          <th>起点</th>
         </tr>
       </thead>
       <tbody>
@@ -112,6 +117,9 @@ export function SiteTable({ world, onEdit }: SiteTableProps) {
                 value={s.parent === null ? '' : String(s.parent)}
                 onChange={(e) => onEdit(s.id, { parent: e.target.value.trim() === '' ? null : Number(e.target.value) })}
               />
+            </td>
+            <td>
+              <button onClick={() => onPick(s.id)}>{startSite === s.id ? '起点 · 取消' : '以此为起点'}</button>
             </td>
           </tr>
         ))}
