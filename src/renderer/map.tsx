@@ -5,7 +5,7 @@ import { Application, Container, Graphics, Text } from 'pixi.js';
 import { useEffect, useRef, useState } from 'react';
 import { mulberry32 } from '../engine/rng.ts';
 import type { Params, Site, Theme, Unit, World } from '../engine/types.ts';
-import { placeText } from './format.ts';
+import { placeText, round2 } from './format.ts';
 
 /** 生成地形用的固定种子：同一份参数每次生成出同一张图。 */
 const TERRAIN_SEED = 20261011;
@@ -37,6 +37,13 @@ const PALETTES: Record<Theme, Palette> = {
   },
 };
 
+/** 一条刻度数字：贴在哪条轴上、刻度值是多少。 */
+interface GridLabel {
+  text: Text;
+  axis: 'x' | 'y';
+  value: number;
+}
+
 interface Scene {
   app: Application;
   root: Container;
@@ -50,6 +57,9 @@ interface Scene {
   unitGfx: Map<number, Graphics>;
   gfxToSite: Map<Graphics, number>;
   unitGfxToUnit: Map<Graphics, number>;
+  /** 两条轴上的刻度数字，画在网格上面、连线下面。 */
+  gridText: Container;
+  gridLabels: GridLabel[];
   palette: Palette;
   zoom: number;
   /** 正在挑的起点据点；没有就是 null。只影响据点圆点画成什么颜色。 */
@@ -84,6 +94,72 @@ function siteAt(scene: Scene, world: World, sx: number, sy: number): number {
     }
   }
   return best;
+}
+
+/** 比例尺取一个整齐的数：让它在屏幕上大约 100 像素宽。 */
+function scaleUnits(zoom: number): number {
+  const target = 100 / zoom;
+  const pow = Math.pow(10, Math.floor(Math.log10(target)));
+  for (const m of [1, 2, 5, 10]) {
+    if (pow * m >= target) return pow * m;
+  }
+  return pow * 10;
+}
+
+/** 把整张地图摆进画布：一进来的时候、以及按「缩到全图」都走这里。 */
+function fitView(scene: Scene, params: Params): void {
+  const { width, height } = scene.app.screen;
+  const margin = 20;
+  scene.zoom = Math.min(
+    (width - margin * 2) / params.mapWidth,
+    (height - margin * 2) / params.mapHeight,
+  );
+  scene.root.scale.set(scene.zoom, -scene.zoom);
+  scene.root.position.set(margin, height - margin);
+}
+
+/** 边界：地图至少留 60 像素在画面里，别拖成一片空白。 */
+function clampPosition(scene: Scene, params: Params): void {
+  const keep = 60;
+  const { width, height } = scene.app.screen;
+  const spanX = params.mapWidth * scene.zoom;
+  const spanY = params.mapHeight * scene.zoom;
+  const p = scene.root.position;
+  p.x = Math.min(width - keep, Math.max(keep - spanX, p.x));
+  p.y = Math.min(height - keep + spanY, Math.max(keep, p.y));
+}
+
+/** 两条轴上的刻度数字：每 1000 单位一个。参数变了才重建，缩放只改位置。 */
+function syncGridLabels(scene: Scene, params: Params): void {
+  for (const g of scene.gridLabels) g.text.destroy();
+  scene.gridLabels = [];
+  const style = { fontSize: 11, fill: scene.palette.label, fontFamily: 'Consolas, ui-monospace, monospace' };
+  for (let x = 0; x <= params.mapWidth; x += 1000) {
+    const text = new Text({ text: String(x), style });
+    text.anchor.set(0.5, 0.5);
+    text.alpha = 0.7;
+    scene.gridText.addChild(text);
+    scene.gridLabels.push({ text, axis: 'x', value: x });
+  }
+  for (let y = 1000; y <= params.mapHeight; y += 1000) {
+    const text = new Text({ text: String(y), style });
+    text.anchor.set(0, 0.5);
+    text.alpha = 0.7;
+    scene.gridText.addChild(text);
+    scene.gridLabels.push({ text, axis: 'y', value: y });
+  }
+}
+
+/** 刻度数字的位置与大小：贴着两条边，屏幕上大小固定；太挤的时候整批不画。 */
+function layoutGridLabels(scene: Scene): void {
+  const pad = 10;
+  const roomy = 1000 * scene.zoom >= 30;
+  for (const g of scene.gridLabels) {
+    g.text.visible = roomy;
+    g.text.scale.set(1 / scene.zoom, -1 / scene.zoom);
+    if (g.axis === 'x') g.text.position.set(g.value, pad / scene.zoom);
+    else g.text.position.set(pad / scene.zoom, g.value);
+  }
 }
 
 /** 网格、边框、海、两条大河、几片山地。种子固定，重画多少次都是同一张。 */
@@ -267,6 +343,8 @@ function redraw(scene: Scene, world: World, params: Params): void {
     label.position.set(s.x, s.y - (siteRadius(s) + 11) / zoom);
     label.visible = zoom >= DETAIL_ZOOM;
   }
+
+  layoutGridLabels(scene);
 }
 
 /** 悬停浮层的内容：指到据点就显示据点，指到部队记号就显示那支部队。x／y 是浮层左上角。 */
@@ -296,9 +374,20 @@ export interface MapViewProps {
   pickUnit: number | null;
   /** 正在挑什么，写在工具行里；没在挑就是 null。 */
   pickHint: string | null;
+  /** 「定位」请求：n 是次数，同一座据点按两次也要重新定位一次。 */
+  focusSite: { id: number; n: number } | null;
   onAddSite: (x: number, y: number) => void;
   onPickSite: (id: number) => void;
   onCancelPick: () => void;
+}
+
+/** 工具行上写的几行读数。 */
+interface ViewInfo {
+  zoom: number;
+  x0: number;
+  x1: number;
+  y0: number;
+  y1: number;
 }
 
 export function MapView({
@@ -308,6 +397,7 @@ export function MapView({
   startSite,
   pickUnit,
   pickHint,
+  focusSite,
   onAddSite,
   onPickSite,
   onCancelPick,
@@ -320,7 +410,13 @@ export function MapView({
   const cancelRef = useRef(onCancelPick);
   const worldRef = useRef(world);
   const paramsRef = useRef(params);
+  const actionsRef = useRef<{
+    zoomBy: (factor: number) => void;
+    fit: () => void;
+    focusOn: (id: number) => void;
+  } | null>(null);
   const [showTerrain, setShowTerrain] = useState(true);
+  const [view, setView] = useState<ViewInfo>({ zoom: 1, x0: 0, x1: 0, y0: 0, y1: 0 });
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
   const [hover, setHover] = useState<Hover | null>(null);
 
@@ -340,6 +436,7 @@ export function MapView({
       root: new Container(),
       terrain: new Graphics(),
       grid: new Graphics(),
+      gridText: new Container(),
       links: new Graphics(),
       sites: new Container(),
       units: new Container(),
@@ -348,6 +445,7 @@ export function MapView({
       unitGfx: new Map(),
       gfxToSite: new Map(),
       unitGfxToUnit: new Map(),
+      gridLabels: [],
       palette: PALETTES[theme],
       zoom: 1,
       start: startSite,
@@ -364,23 +462,15 @@ export function MapView({
         scene.app.stage.eventMode = 'static';
         scene.app.stage.hitArea = scene.app.screen;
         scene.app.stage.addChild(scene.root);
-        scene.root.addChild(scene.terrain, scene.grid, scene.links, scene.sites, scene.units);
+        scene.root.addChild(scene.terrain, scene.grid, scene.gridText, scene.links, scene.sites, scene.units);
         // PixiJS 只把冒泡事件通知给 eventMode 是 static／dynamic 的对象，容器的默认值是 passive，
         // 于是 notifyTarget 对 passive 的容器第一句就 return。想在这两个容器上听子对象的
         // pointerover／pointerout，它们自己必须是 static。
         scene.sites.eventMode = 'static';
         scene.units.eventMode = 'static';
 
-        const width = scene.app.screen.width;
-        const height = scene.app.screen.height;
-        const margin = 20;
-        scene.zoom = Math.min(
-          (width - margin * 2) / paramsRef.current.mapWidth,
-          (height - margin * 2) / paramsRef.current.mapHeight,
-        );
-        scene.root.scale.set(scene.zoom, -scene.zoom);
-        scene.root.position.set(margin, height - margin);
-
+        fitView(scene, paramsRef.current);
+        syncGridLabels(scene, paramsRef.current);
         syncSites(scene, worldRef.current);
         syncUnits(scene, worldRef.current);
         redraw(scene, worldRef.current, paramsRef.current);
@@ -389,13 +479,61 @@ export function MapView({
           x: (sx - scene.root.position.x) / scene.zoom,
           y: (scene.root.position.y - sy) / scene.zoom,
         });
+
+        /** 把当前倍数与视口盖住的地图范围写进工具行。 */
+        const syncView = () => {
+          const { width, height } = scene.app.screen;
+          const p = scene.root.position;
+          const z = scene.zoom;
+          setView({
+            zoom: z,
+            x0: (0 - p.x) / z,
+            x1: (width - p.x) / z,
+            y0: (p.y - height) / z,
+            y1: p.y / z,
+          });
+        };
+
         const zoomAt = (sx: number, sy: number, factor: number) => {
           const before = toWorld(sx, sy);
-          scene.zoom = Math.max(0.02, Math.min(6, scene.zoom * factor));
+          // 上下界拦住滚轮与按钮，但不把当前倍数硬拽回来：地图很大时「缩到全图」会落在下界以下。
+          const { zoomMin, zoomMax } = paramsRef.current;
+          scene.zoom = Math.max(
+            Math.min(zoomMin, scene.zoom),
+            Math.min(Math.max(zoomMax, scene.zoom), scene.zoom * factor),
+          );
           scene.root.scale.set(scene.zoom, -scene.zoom);
           scene.root.position.set(sx - before.x * scene.zoom, sy + before.y * scene.zoom);
+          clampPosition(scene, paramsRef.current);
           redraw(scene, worldRef.current, paramsRef.current);
+          syncView();
         };
+
+        // 工具行上那三个按钮与据点表的「定位」都走这里。
+        actionsRef.current = {
+          zoomBy: (factor: number) => {
+            const { width, height } = scene.app.screen;
+            zoomAt(width / 2, height / 2, factor);
+          },
+          fit: () => {
+            fitView(scene, paramsRef.current);
+            redraw(scene, worldRef.current, paramsRef.current);
+            syncView();
+          },
+          focusOn: (id: number) => {
+            const s = worldRef.current.sites.find((x) => x.id === id);
+            if (!s) return;
+            const { width, height } = scene.app.screen;
+            const z = Math.max(scene.zoom, 0.4);
+            scene.zoom = z;
+            scene.root.scale.set(z, -z);
+            scene.root.position.set(width / 2 - s.x * z, height / 2 + s.y * z);
+            clampPosition(scene, paramsRef.current);
+            redraw(scene, worldRef.current, paramsRef.current);
+            syncView();
+          },
+        };
+        syncView();
 
         let dragging = false;
         let moved = false;
@@ -424,12 +562,15 @@ export function MapView({
             scene.root.position.y += e.clientY - lastY;
             lastX = e.clientX;
             lastY = e.clientY;
+            clampPosition(scene, paramsRef.current);
+            syncView();
           }
           // 按下之后挪过 4 像素就算拖动，松手时不算一次点击。
           if (Math.abs(e.clientX - downX) + Math.abs(e.clientY - downY) > 4) moved = true;
           const r = canvas.getBoundingClientRect();
           const p = toWorld(e.clientX - r.left, e.clientY - r.top);
-          setCursor({ x: Math.round(p.x), y: Math.round(p.y) });
+          // 读数留到两位小数；取整留给写进世界的坐标，见下面 onDouble。
+          setCursor({ x: p.x, y: p.y });
         };
         const onUp = (e: PointerEvent) => {
           dragging = false;
@@ -444,7 +585,8 @@ export function MapView({
         const onDouble = (e: MouseEvent) => {
           const r = canvas.getBoundingClientRect();
           const p = toWorld(e.clientX - r.left, e.clientY - r.top);
-          addSiteRef.current(Math.round(p.x), Math.round(p.y));
+          // 新据点的坐标也留两位小数，与表里那一格对得上。
+          addSiteRef.current(round2(p.x), round2(p.y));
         };
 
         canvas.addEventListener('wheel', onWheel, { passive: false });
@@ -505,11 +647,12 @@ export function MapView({
     // 只在挂载时建一次；主题、参数、世界的变化由下面几个 effect 处理。
   }, []);
 
-  // 地图的框或主题变了：换色板、重画底图。
+  // 地图的框或主题变了：换色板、重建刻度数字、重画底图。
   useEffect(() => {
     const scene = sceneRef.current;
     if (!scene) return;
     scene.palette = PALETTES[theme];
+    syncGridLabels(scene, params);
     redraw(scene, worldRef.current, params);
   }, [theme, params]);
 
@@ -529,6 +672,12 @@ export function MapView({
     if (!scene) return;
     syncUnits(scene, world);
   }, [world]);
+
+  // 据点表里按「定位」：把那一座移到画面中央。n 变了就重来一次，同一座按两次也生效。
+  useEffect(() => {
+    if (focusSite === null) return;
+    actionsRef.current?.focusOn(focusSite.id);
+  }, [focusSite]);
 
   useEffect(() => {
     const scene = sceneRef.current;
@@ -551,16 +700,42 @@ export function MapView({
     }
   }, [startSite, pickUnit]);
 
+  // 坐标落在地图范围外的据点：数据不动，只是画在边框外面，这里把座数写出来。
+  const outside = world.sites.filter(
+    (s) => s.x < 0 || s.x > params.mapWidth || s.y < 0 || s.y > params.mapHeight,
+  ).length;
+
+  // 比例尺：取一个整齐的数，让它在屏幕上大约 100 像素宽。
+  const barUnits = scaleUnits(view.zoom);
+  const barWidth = Math.max(20, Math.round(barUnits * view.zoom));
+
   return (
     <div className="mapwrap">
-      <div className="map" ref={hostRef} />
+      <div className="mapbox">
+        <div className="map" ref={hostRef} />
+        <div className="scalebar">
+          <span className="line" style={{ width: String(barWidth) + 'px' }} />
+          <span className="dim small">{barUnits} 地图单位</span>
+        </div>
+      </div>
       <div className="mapbar">
+        <button onClick={() => actionsRef.current?.zoomBy(1.5)}>放大</button>
+        <button onClick={() => actionsRef.current?.zoomBy(1 / 1.5)}>缩小</button>
+        <button onClick={() => actionsRef.current?.fit()}>缩到全图</button>
+        <span className="dim small">
+          缩放 {view.zoom.toFixed(3)} · 1 像素 = {(1 / view.zoom).toFixed(1)} 地图单位
+        </span>
         <label className="dim small">
           <input type="checkbox" checked={showTerrain} onChange={(e) => setShowTerrain(e.target.checked)} /> 生成的地形层
         </label>
+        <span className="dim small">
+          看到 x {Math.round(view.x0)}..{Math.round(view.x1)} · y {Math.round(view.y0)}..{Math.round(view.y1)}
+        </span>
+        <span className="dim small">地图 {params.mapWidth} × {params.mapHeight}</span>
+        {outside > 0 ? <span className="dim small">有 {outside} 座据点的坐标在地图外</span> : null}
+        <span className="dim small">{cursor ? '坐标 ' + cursor.x.toFixed(2) + ', ' + cursor.y.toFixed(2) : '坐标 —'}</span>
         <span className="dim small">滚轮缩放 · 拖动平移 · 双击空白处新增据点 · 单击据点挑起点／终点 · 指到据点或部队看它的数</span>
         {pickHint !== null ? <span className="dim small">{pickHint}</span> : null}
-        <span className="dim small">{cursor ? '坐标 ' + String(cursor.x) + ', ' + String(cursor.y) : '坐标 —'}</span>
       </div>
       {hover ? (
         <div className="maphover" style={{ left: String(hover.x + 12) + 'px', top: String(hover.y + 12) + 'px' }}>
@@ -574,7 +749,7 @@ export function MapView({
                 民心 {Math.round(hover.site.morale)} · 稳定 {Math.round(hover.site.stability)}
               </div>
               <div>
-                坐标 {hover.site.x}, {hover.site.y}
+                坐标 {hover.site.x.toFixed(2)}, {hover.site.y.toFixed(2)}
               </div>
             </>
           ) : (

@@ -4,7 +4,7 @@
 import { useRef, useState } from 'react';
 import type { Link, Order, Site, Terrain, Unit, World } from '../engine/types.ts';
 import { linkLength } from '../engine/world.ts';
-import { factionName, orderText, placeText, siteName, TERRAIN_LABEL, TERRAINS } from './format.ts';
+import { factionName, orderText, placeText, round2, siteName, TERRAIN_LABEL, TERRAINS } from './format.ts';
 
 function toNumber(text: string, fallback: number): number {
   if (text.trim() === '') return fallback;
@@ -113,9 +113,11 @@ interface SiteTableProps {
   startSite: number | null;
   /** 点「以此为起点」：接着在地图上挑终点，见设计 §六。 */
   onPick: (id: number) => void;
+  /** 点「定位」：地图页签把这一座移到画面中央。 */
+  onLocate: (id: number) => void;
 }
 
-export function SiteTable({ world, onEdit, startSite, onPick }: SiteTableProps) {
+export function SiteTable({ world, onEdit, startSite, onPick, onLocate }: SiteTableProps) {
   if (world.sites.length === 0) return <p className="dim">还没有据点。</p>;
 
   return (
@@ -131,7 +133,9 @@ export function SiteTable({ world, onEdit, startSite, onPick }: SiteTableProps) 
           <th>粮草</th>
           <th>势力</th>
           <th>上级</th>
-          <th>起点</th>
+          <th>坐标 x</th>
+          <th>坐标 y</th>
+          <th>地图</th>
         </tr>
       </thead>
       <tbody>
@@ -212,7 +216,26 @@ export function SiteTable({ world, onEdit, startSite, onPick }: SiteTableProps) 
               />
             </td>
             <td>
-              <button onClick={() => onPick(s.id)}>{startSite === s.id ? '起点 · 取消' : '以此为起点'}</button>
+              <input
+                type="number"
+                step="0.01"
+                value={round2(s.x)}
+                onChange={(e) => onEdit(s.id, { x: toNumber(e.target.value, s.x) })}
+              />
+            </td>
+            <td>
+              <input
+                type="number"
+                step="0.01"
+                value={round2(s.y)}
+                onChange={(e) => onEdit(s.id, { y: toNumber(e.target.value, s.y) })}
+              />
+            </td>
+            <td>
+              <div className="row">
+                <button onClick={() => onPick(s.id)}>{startSite === s.id ? '起点 · 取消' : '以此为起点'}</button>
+                <button onClick={() => onLocate(s.id)}>定位</button>
+              </div>
             </td>
           </tr>
         ))}
@@ -341,7 +364,7 @@ export function LinkTable({ world, onEdit }: LinkTableProps) {
               {' — '}
               {world.sites.find((s) => s.id === l.b)?.name ?? String(l.b)}
             </td>
-            <td className="ro">{Math.round(linkLength(world, l))}</td>
+            <td className="ro">{Math.round(linkLength(world, l) * 10) / 10}</td>
             <td>
               <input
                 type="number"

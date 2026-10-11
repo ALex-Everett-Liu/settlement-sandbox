@@ -21,6 +21,11 @@ function percent(t: number): string {
   return String(Math.round(clamped * 100)) + '%';
 }
 
+/** 坐标这类带小数的值：留两位，免得浮点尾巴露出来。 */
+export function round2(v: number): number {
+  return Math.round(v * 100) / 100;
+}
+
 /** Where the unit stands right now. The only value that moves on its own. */
 export function placeText(world: World, place: Place): string {
   if (place.kind === 'site') return '在 ' + siteName(world, place.site);

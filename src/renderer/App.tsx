@@ -6,18 +6,20 @@ import type { Link, Order, Params, Site, Theme, Unit, World } from '../engine/ty
 import { addLink, addSite, demoWorld, siteName } from '../engine/world.ts';
 import type { SandboxApi } from '../shared/ipc.ts';
 import { MapView } from './map.tsx';
+import { SettingsView } from './settings.tsx';
 import { LinkTable, SiteTable, UnitTable } from './tables.tsx';
 
 const api = (window as unknown as { sandbox?: SandboxApi }).sandbox;
 const SPEEDS = [1, 2, 4, 8, 16];
 
-type View = 'sites' | 'units' | 'links' | 'map';
+type View = 'sites' | 'units' | 'links' | 'map' | 'settings';
 
 const VIEWS: { id: View; label: string }[] = [
   { id: 'sites', label: '据点' },
   { id: 'units', label: '部队' },
   { id: 'links', label: '连接' },
   { id: 'map', label: '地图' },
+  { id: 'settings', label: '设置' },
 ];
 
 export function App() {
@@ -32,6 +34,8 @@ export function App() {
   const [linkFrom, setLinkFrom] = useState(0);
   // 正在挑目的地的那支部队：0 表示没有。与起点共用地图上那一次点选。
   const [orderTarget, setOrderTarget] = useState(0);
+  // 「定位」请求：n 是次数，同一座据点按两次也要重新定位一次。
+  const [focusSite, setFocusSite] = useState<{ id: number; n: number } | null>(null);
   const worldRef = useRef<World | null>(null);
 
   // The theme rides in the params table, so it is stored in this world's database.
@@ -177,11 +181,23 @@ export function App() {
     setNote('快照：' + p);
   }, []);
 
-  const switchTheme = useCallback(() => {
-    const next: Params = { ...params, theme: theme === 'light' ? 'dark' : 'light' };
-    setParams(next);
-    if (api) void api.saveParams(next);
-  }, [params, theme]);
+  /** 设置页签改参数：先夹一道范围，再写回世界库（主题也在这一页里改）。 */
+  const writeParams = useCallback(
+    (patch: Partial<Params>) => {
+      const next: Params = { ...params, ...patch };
+      next.mapWidth = Math.round(Math.min(1000000, Math.max(100, next.mapWidth)));
+      next.mapHeight = Math.round(Math.min(1000000, Math.max(100, next.mapHeight)));
+      next.zoomMin = Math.min(1, Math.max(0.0001, next.zoomMin));
+      next.zoomMax = Math.min(100, Math.max(0.01, next.zoomMax));
+      if (next.zoomMax < next.zoomMin) {
+        if (patch.zoomMax !== undefined) next.zoomMin = next.zoomMax;
+        else next.zoomMax = next.zoomMin;
+      }
+      setParams(next);
+      if (api) void api.saveParams(next);
+    },
+    [params],
+  );
 
   // 把答案写回世界并存一次：这类回答不该等到月末那一次自动保存。
   const answer = useCallback(
@@ -236,6 +252,12 @@ export function App() {
     },
     [commit],
   );
+
+  /** 据点表里按「定位」：切到地图页签，把那一座移到画面中央。 */
+  const locateSite = useCallback((id: number) => {
+    setFocusSite((cur) => ({ id, n: (cur?.n ?? 0) + 1 }));
+    setView('map');
+  }, []);
 
   /** 点「前往…」：等一次地图上的点选，选中哪个据点就是目的地。 */
   const startOrderPick = useCallback((unitId: number) => {
@@ -302,6 +324,7 @@ export function App() {
     units: world ? world.units.length : 0,
     links: world ? world.links.length : 0,
     map: world ? world.sites.length : 0,
+    settings: 0,
   };
   const logTail = world ? world.log.slice(-14).reverse() : [];
 
@@ -329,15 +352,12 @@ export function App() {
             保存
           </button>
           <button onClick={() => void takeSnapshot()}>快照</button>
-          <button className="push" onClick={switchTheme}>
-            {theme === 'light' ? '深色' : '浅色'}
-          </button>
         </div>
         <div className="row tabs">
           {VIEWS.map((v) => (
             <button key={v.id} className={view === v.id ? 'tab active' : 'tab'} onClick={() => setView(v.id)}>
               {v.label}
-              <span className="dim"> {counts[v.id]}</span>
+              {counts[v.id] > 0 ? <span className="dim"> {counts[v.id]}</span> : null}
             </button>
           ))}
           <span className="dim small push">新增连接：在「地图」页签点两个据点</span>
@@ -358,6 +378,7 @@ export function App() {
             onEdit={editSite}
             startSite={linkFrom === 0 ? null : linkFrom}
             onPick={pickSite}
+            onLocate={locateSite}
           />
         ) : view === 'units' ? (
           <UnitTable
@@ -369,6 +390,8 @@ export function App() {
           />
         ) : view === 'links' ? (
           <LinkTable world={world} onEdit={editLink} />
+        ) : view === 'settings' ? (
+          <SettingsView world={world} params={params} theme={theme} onChange={writeParams} />
         ) : (
           <MapView
             world={world}
@@ -376,6 +399,7 @@ export function App() {
             theme={theme}
             startSite={linkFrom === 0 ? null : linkFrom}
             pickUnit={orderTarget === 0 ? null : orderTarget}
+            focusSite={focusSite}
             pickHint={
               orderTarget !== 0
                 ? '挑目的地：在地图上点一个据点，Esc 或点空白处取消'

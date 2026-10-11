@@ -30,6 +30,10 @@ export const DEFAULT_PARAMS: Params = {
   mapWidth: 10000,
   mapHeight: 7000,
 
+  /** 缩放的上下界；types.ts 里那一段写了它俩与「缩到全图」的关系。 */
+  zoomMin: 0.02,
+  zoomMax: 6,
+
   /** The window opens light; the toggle writes the other value back to the database. */
   theme: 'light',
 };

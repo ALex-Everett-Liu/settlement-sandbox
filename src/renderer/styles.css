@@ -208,8 +208,33 @@ td.ro {
   position: relative;
 }
 
+/* 画布与比例尺：比例尺贴着画布左下角，所以两者放在同一个定位框里。 */
+.mapbox {
+  position: relative;
+}
+
+.scalebar {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  padding: 3px 6px;
+  background: var(--field);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+}
+
+.scalebar .line {
+  display: block;
+  height: 7px;
+  border: 1px solid var(--fg);
+  border-top: 0;
+}
+
 .map {
-  height: calc(100vh - 215px);
+  height: calc(100vh - 250px);
   min-height: 320px;
   border: 1px solid var(--line);
   border-radius: 3px;

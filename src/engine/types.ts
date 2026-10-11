@@ -131,6 +131,12 @@ export interface Params {
   /** 地图的框：原点在左下角，x 向右、y 向上。 */
   mapWidth: number;
   mapHeight: number;
+  /**
+   * 缩放的上下界。滚轮与「放大」「缩小」不越过去；「缩到全图」不受它们限制，
+   * 所以地图很大时它会落在下界以下——那时再往小里缩放仍会被挡住，往回缩放不受影响。
+   */
+  zoomMin: number;
+  zoomMax: number;
 
   /** UI theme. The engine never reads it; only the shell does. */
   theme: Theme;
