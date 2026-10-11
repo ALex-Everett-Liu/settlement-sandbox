@@ -3,7 +3,7 @@ import { answerAsk } from '../engine/ask.ts';
 import { DEFAULT_PARAMS } from '../engine/params.ts';
 import { dayOfMonth, month, tickDay, year } from '../engine/tick.ts';
 import type { Link, Order, Params, Site, Theme, Unit, World } from '../engine/types.ts';
-import { addFaction, addLink, addSite, demoWorld, siteName } from '../engine/world.ts';
+import { addFaction, addLink, addSite, demoWorld, linkName, siteName } from '../engine/world.ts';
 import type { SandboxApi } from '../shared/ipc.ts';
 import { MapView } from './map.tsx';
 import { SettingsView } from './settings.tsx';
@@ -263,6 +263,88 @@ export function App() {
     [commit],
   );
 
+  /** 删一座据点：四条挡路条件，挡在哪一条就把哪一条写进说明行。 */
+  const deleteSite = useCallback(
+    (id: number) => {
+      const w = worldRef.current;
+      if (!w) return;
+      const s = w.sites.find((x) => x.id === id);
+      if (!s) return;
+      const why: string[] = [];
+      const staying = w.units.filter((u) => u.place.kind === 'site' && u.place.site === id).length;
+      if (staying > 0) why.push('有 ' + String(staying) + ' 支部队停在里面');
+      const hanging = w.links.filter((l) => l.a === id || l.b === id).length;
+      if (hanging > 0) why.push('有 ' + String(hanging) + ' 条连接挂在它两头');
+      const below = w.sites.filter((x) => x.parent === id).length;
+      if (below > 0) why.push('有 ' + String(below) + ' 座据点认它当上级');
+      const heading = w.units.filter((u) => {
+        const p = u.place;
+        const onTheWay = (p.kind === 'march' || p.kind === 'camp') && p.to === id;
+        return onTheWay || u.queue.some((o) => o.kind === 'march' && o.to === id);
+      }).length;
+      if (heading > 0) why.push('有 ' + String(heading) + ' 支部队正朝它去');
+      if (why.length > 0) {
+        setNote('「' + s.name + '」' + why.join('、') + '，先把这些处理掉，再删');
+        return;
+      }
+      w.sites = w.sites.filter((x) => x.id !== id);
+      if (linkFrom === id) setLinkFrom(0);
+      commit(w);
+      setNote('删掉了据点「' + s.name + '」（#' + String(id) + '）');
+      if (api) void api.saveWorld(w);
+    },
+    [commit, linkFrom],
+  );
+
+  /** 删一支部队：只有引擎正停在它断粮怎么办那一问上时才挡回来。 */
+  const deleteUnit = useCallback(
+    (id: number) => {
+      const w = worldRef.current;
+      if (!w) return;
+      const u = w.units.find((x) => x.id === id);
+      if (!u) return;
+      const t = w.pending === null ? null : w.pending.target;
+      if (t !== null && t.kind === 'unitFoodPolicy' && t.unit === id) {
+        setNote('「' + u.name + '」断粮怎么办那一问还挂着，先答完或取消，再删');
+        return;
+      }
+      w.units = w.units.filter((x) => x.id !== id);
+      if (orderTarget === id) setOrderTarget(0);
+      commit(w);
+      setNote('删掉了部队「' + u.name + '」（#' + String(id) + '）');
+      if (api) void api.saveWorld(w);
+    },
+    [commit, orderTarget],
+  );
+
+  /** 删一条连接：上面有部队在行军或扎营就走不了；引擎正停在它的地貌那一问上也一样。 */
+  const deleteLink = useCallback(
+    (id: number) => {
+      const w = worldRef.current;
+      if (!w) return;
+      const l = w.links.find((x) => x.id === id);
+      if (!l) return;
+      const t = w.pending === null ? null : w.pending.target;
+      if (t !== null && t.kind === 'linkTerrain' && t.link === id) {
+        setNote('这条连接的地貌那一问还挂着，先答完或取消，再删');
+        return;
+      }
+      const on = w.units.filter((u) => {
+        const p = u.place;
+        return (p.kind === 'march' || p.kind === 'camp') && p.link === id;
+      }).length;
+      if (on > 0) {
+        setNote('这条连接上有 ' + String(on) + ' 支部队在行军或扎营，先让它们走开，再删');
+        return;
+      }
+      w.links = w.links.filter((x) => x.id !== id);
+      commit(w);
+      setNote('删掉了连接「' + linkName(w, l) + '」（#' + String(id) + '）');
+      if (api) void api.saveWorld(w);
+    },
+    [commit],
+  );
+
   /** 地图上双击：在双击的位置新增一个据点，名字先给个编号，其余用最小默认值。 */
   const addSiteAt = useCallback(
     (x: number, y: number) => {
@@ -465,6 +547,7 @@ export function App() {
                 startSite={linkFrom === 0 ? null : linkFrom}
                 onPick={pickSite}
                 onLocate={locateSite}
+                onDelete={deleteSite}
               />
             ) : view === 'units' ? (
               <UnitTable
@@ -474,9 +557,10 @@ export function App() {
                 onPickDestination={startOrderPick}
                 pickingUnit={orderTarget === 0 ? null : orderTarget}
                 onLocate={locateUnit}
+                onDelete={deleteUnit}
               />
             ) : view === 'links' ? (
-              <LinkTable world={world} onEdit={editLink} />
+              <LinkTable world={world} onEdit={editLink} onDelete={deleteLink} />
             ) : view === 'settings' ? (
               <SettingsView world={world} params={params} theme={theme} onChange={writeParams} />
             ) : null}

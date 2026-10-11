@@ -21,6 +21,31 @@ function round1(v: number): number {
 const NO_PARENT = '（无）';
 
 /**
+ * 删除按钮。要按两下：第一下把按钮换成「确认删除」，鼠标移开就收回。
+ * 挡路的情况由调用方判——按了第二下也可能什么也没删，说明行会写清楚挡在哪一条。
+ */
+function DeleteButton({ what, onConfirm }: { what: string; onConfirm: () => void }) {
+  const [armed, setArmed] = useState(false);
+  return (
+    <button
+      className={armed ? 'danger' : undefined}
+      title={armed ? '再点一下就删掉' + what : '删掉' + what + '：要按两下'}
+      onMouseLeave={() => setArmed(false)}
+      onClick={() => {
+        if (armed) {
+          setArmed(false);
+          onConfirm();
+          return;
+        }
+        setArmed(true);
+      }}
+    >
+      {armed ? '确认删除' : '删除'}
+    </button>
+  );
+}
+
+/**
  * 候选列表里的一条。写回世界的是 id，名字只用来显示与过滤——
  * 名字允许重复，两处同名时按回车不写回，靠候选里跟着的编号分。
  */
@@ -149,9 +174,6 @@ interface FactionTableProps {
  * 这些部队的兵力加总，以及这些据点自存的金钱与粮草（部队随身带着的那份不算在粮里）。
  */
 export function FactionTable({ world, onRename, onDelete, onAdd }: FactionTableProps) {
-  // 删除要按两下：第一下把按钮换成「确认删除」，鼠标移开这一行就收回。
-  const [confirm, setConfirm] = useState(0);
-
   const rows = world.factions.map((f) => {
     const sites = world.sites.filter((s) => s.faction === f.id);
     const units = world.units.filter((u) => u.faction === f.id);
@@ -187,7 +209,7 @@ export function FactionTable({ world, onRename, onDelete, onAdd }: FactionTableP
           </tr>
         ) : (
           rows.map((r) => (
-            <tr key={r.faction.id} onMouseLeave={() => setConfirm(0)}>
+            <tr key={r.faction.id}>
               <td>
                 <input value={r.faction.name} onChange={(e) => onRename(r.faction.id, e.target.value)} />
               </td>
@@ -197,19 +219,7 @@ export function FactionTable({ world, onRename, onDelete, onAdd }: FactionTableP
               <td className="ro">{round1(r.money)}</td>
               <td className="ro">{round1(r.food)}</td>
               <td>
-                <button
-                  className={confirm === r.faction.id ? 'danger' : undefined}
-                  onClick={() => {
-                    if (confirm === r.faction.id) {
-                      setConfirm(0);
-                      onDelete(r.faction.id);
-                      return;
-                    }
-                    setConfirm(r.faction.id);
-                  }}
-                >
-                  {confirm === r.faction.id ? '确认删除' : '删除'}
-                </button>
+                <DeleteButton what={'势力「' + r.faction.name + '」'} onConfirm={() => onDelete(r.faction.id)} />
               </td>
             </tr>
           ))
@@ -235,9 +245,11 @@ interface SiteTableProps {
   onPick: (id: number) => void;
   /** 点「定位」：地图页签把这一座移到画面中央。 */
   onLocate: (id: number) => void;
+  /** 点「删除」（第二下）：有部队停着、有连接挂着、有据点认它当上级、有部队正朝它去，都会被挡回来。 */
+  onDelete: (id: number) => void;
 }
 
-export function SiteTable({ world, onEdit, startSite, onPick, onLocate }: SiteTableProps) {
+export function SiteTable({ world, onEdit, startSite, onPick, onLocate, onDelete }: SiteTableProps) {
   if (world.sites.length === 0) return <p className="dim">还没有据点。</p>;
 
   return (
@@ -350,6 +362,7 @@ export function SiteTable({ world, onEdit, startSite, onPick, onLocate }: SiteTa
               <div className="row">
                 <button onClick={() => onPick(s.id)}>{startSite === s.id ? '起点 · 取消' : '以此为起点'}</button>
                 <button onClick={() => onLocate(s.id)}>定位</button>
+                <DeleteButton what={'据点「' + s.name + '」'} onConfirm={() => onDelete(s.id)} />
               </div>
             </td>
           </tr>
@@ -369,9 +382,11 @@ interface UnitTableProps {
   pickingUnit: number | null;
   /** 点「定位」：地图页签把这一支部队移到画面中央。 */
   onLocate: (id: number) => void;
+  /** 点「删除」（第二下）：引擎正停在这支部队断粮怎么办那一问上时会挡回来。 */
+  onDelete: (id: number) => void;
 }
 
-export function UnitTable({ world, onEdit, onOrder, onPickDestination, pickingUnit, onLocate }: UnitTableProps) {
+export function UnitTable({ world, onEdit, onOrder, onPickDestination, pickingUnit, onLocate, onDelete }: UnitTableProps) {
   if (world.units.length === 0) return <p className="dim">还没有部队。</p>;
 
   return (
@@ -447,7 +462,10 @@ export function UnitTable({ world, onEdit, onOrder, onPickDestination, pickingUn
               ) : null}
             </td>
             <td>
-              <button onClick={() => onLocate(u.id)}>定位</button>
+              <div className="row">
+                <button onClick={() => onLocate(u.id)}>定位</button>
+                <DeleteButton what={'部队「' + u.name + '」'} onConfirm={() => onDelete(u.id)} />
+              </div>
             </td>
           </tr>
         ))}
@@ -459,9 +477,11 @@ export function UnitTable({ world, onEdit, onOrder, onPickDestination, pickingUn
 interface LinkTableProps {
   world: World;
   onEdit: (id: number, patch: Partial<Link>) => void;
+  /** 点「删除」（第二下）：这条连接上有部队行军或扎营时会被挡回来。 */
+  onDelete: (id: number) => void;
 }
 
-export function LinkTable({ world, onEdit }: LinkTableProps) {
+export function LinkTable({ world, onEdit, onDelete }: LinkTableProps) {
   if (world.links.length === 0) return <p className="dim">还没有连接。</p>;
 
   return (
@@ -475,37 +495,42 @@ export function LinkTable({ world, onEdit }: LinkTableProps) {
         </tr>
       </thead>
       <tbody>
-        {world.links.map((l) => (
-          <tr key={l.id}>
-            <td className="ro">
-              {world.sites.find((s) => s.id === l.a)?.name ?? String(l.a)}
-              {' — '}
-              {world.sites.find((s) => s.id === l.b)?.name ?? String(l.b)}
-            </td>
-            <td className="ro">{Math.round(linkLength(world, l) * 10) / 10}</td>
-            <td>
-              <input
-                type="number"
-                step="0.05"
-                value={l.detour}
-                onChange={(e) => onEdit(l.id, { detour: toNumber(e.target.value, l.detour) })}
-              />
-            </td>
-            <td>
-              <select
-                value={l.terrain ?? ''}
-                onChange={(e) => onEdit(l.id, { terrain: e.target.value === '' ? null : (e.target.value as Terrain) })}
-              >
-                <option value="">（未填）</option>
-                {TERRAINS.map((t) => (
-                  <option key={t} value={t}>
-                    {TERRAIN_LABEL[t]}
-                  </option>
-                ))}
-              </select>
-            </td>
-          </tr>
-        ))}
+        {world.links.map((l) => {
+          const a = world.sites.find((s) => s.id === l.a)?.name ?? String(l.a);
+          const b = world.sites.find((s) => s.id === l.b)?.name ?? String(l.b);
+          return (
+            <tr key={l.id}>
+              <td className="ro">
+                {a}
+                {' — '}
+                {b}
+                <DeleteButton what={'连接「' + a + ' — ' + b + '」'} onConfirm={() => onDelete(l.id)} />
+              </td>
+              <td className="ro">{Math.round(linkLength(world, l) * 10) / 10}</td>
+              <td>
+                <input
+                  type="number"
+                  step="0.05"
+                  value={l.detour}
+                  onChange={(e) => onEdit(l.id, { detour: toNumber(e.target.value, l.detour) })}
+                />
+              </td>
+              <td>
+                <select
+                  value={l.terrain ?? ''}
+                  onChange={(e) => onEdit(l.id, { terrain: e.target.value === '' ? null : (e.target.value as Terrain) })}
+                >
+                  <option value="">（未填）</option>
+                  {TERRAINS.map((t) => (
+                    <option key={t} value={t}>
+                      {TERRAIN_LABEL[t]}
+                    </option>
+                  ))}
+                </select>
+              </td>
+            </tr>
+          );
+        })}
       </tbody>
     </table>
   );

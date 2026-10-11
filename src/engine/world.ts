@@ -5,30 +5,33 @@ export function emptyWorld(): World {
 }
 
 /**
- * 新的编号取当前最大编号加一。删掉的编号不回收——旧存档里指到那个编号的据点与部队
- * 会直接认到新势力头上，那比编号不连号难查得多。
+ * 下一个编号：取当前最大编号加一。删掉的编号一律不回收——旧存档里指到那个编号的据点、
+ * 部队或连接会直接认到新对象头上，那比编号不连号难查得多。
  */
+function nextId(list: { id: Id }[]): Id {
+  return list.reduce((max, x) => Math.max(max, x.id), 0) + 1;
+}
+
 export function addFaction(world: World, name: string): Faction {
-  const id = world.factions.reduce((max, f) => Math.max(max, f.id), 0) + 1;
-  const f: Faction = { id, name };
+  const f: Faction = { id: nextId(world.factions), name };
   world.factions.push(f);
   return f;
 }
 
 export function addSite(world: World, site: Omit<Site, 'id'>): Site {
-  const s: Site = { ...site, id: world.sites.length + 1 };
+  const s: Site = { ...site, id: nextId(world.sites) };
   world.sites.push(s);
   return s;
 }
 
 export function addLink(world: World, a: Id, b: Id, detour: number, terrain: Terrain | null): Link {
-  const l: Link = { id: world.links.length + 1, a, b, detour, terrain };
+  const l: Link = { id: nextId(world.links), a, b, detour, terrain };
   world.links.push(l);
   return l;
 }
 
 export function addUnit(world: World, unit: Omit<Unit, 'id'>): Unit {
-  const u: Unit = { ...unit, id: world.units.length + 1 };
+  const u: Unit = { ...unit, id: nextId(world.units) };
   world.units.push(u);
   return u;
 }
