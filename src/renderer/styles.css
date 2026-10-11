@@ -139,6 +139,12 @@ button.primary {
   color: var(--acc);
 }
 
+/* 删除要按两下：第一下之后按钮变成这个样子，再点一下才真的删。 */
+button.danger {
+  border-color: #c2410c;
+  color: #c2410c;
+}
+
 button.tab {
   color: var(--dim);
 }
@@ -187,6 +193,19 @@ td input[type='number'] {
 td.ro {
   color: var(--dim);
   white-space: nowrap;
+}
+
+/* 势力表末尾那一行：整行就是一个「＋ 新增势力」。 */
+tfoot td {
+  background: var(--head);
+}
+
+tfoot button {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: var(--acc);
 }
 
 .log {
@@ -303,6 +322,12 @@ td.ro {
 .picklist .more {
   padding: 3px 7px;
   white-space: nowrap;
+}
+
+/* 候选里跟在名字后面的编号：两个势力或据点重名时靠它分。 */
+.picklist .tag {
+  color: var(--dim);
+  font-size: 12px;
 }
 
 /* 打进去的字与任何名字都对不上：字留在格子里，把格子标出来。 */

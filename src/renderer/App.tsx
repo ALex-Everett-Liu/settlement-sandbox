@@ -3,18 +3,19 @@ import { answerAsk } from '../engine/ask.ts';
 import { DEFAULT_PARAMS } from '../engine/params.ts';
 import { dayOfMonth, month, tickDay, year } from '../engine/tick.ts';
 import type { Link, Order, Params, Site, Theme, Unit, World } from '../engine/types.ts';
-import { addLink, addSite, demoWorld, siteName } from '../engine/world.ts';
+import { addFaction, addLink, addSite, demoWorld, siteName } from '../engine/world.ts';
 import type { SandboxApi } from '../shared/ipc.ts';
 import { MapView } from './map.tsx';
 import { SettingsView } from './settings.tsx';
-import { LinkTable, SiteTable, UnitTable } from './tables.tsx';
+import { FactionTable, LinkTable, SiteTable, UnitTable } from './tables.tsx';
 
 const api = (window as unknown as { sandbox?: SandboxApi }).sandbox;
 const SPEEDS = [1, 2, 4, 8, 16];
 
-type View = 'sites' | 'units' | 'links' | 'map' | 'settings';
+type View = 'factions' | 'sites' | 'units' | 'links' | 'map' | 'settings';
 
 const VIEWS: { id: View; label: string }[] = [
+  { id: 'factions', label: '势力' },
   { id: 'sites', label: '据点' },
   { id: 'units', label: '部队' },
   { id: 'links', label: '连接' },
@@ -215,6 +216,53 @@ export function App() {
     [commit],
   );
 
+  /** 势力表里改名字：与别的表一样就地改，等月末那一次自动保存。 */
+  const renameFaction = useCallback(
+    (id: number, name: string) => {
+      const w = worldRef.current;
+      if (!w) return;
+      const f = w.factions.find((x) => x.id === id);
+      if (!f) return;
+      f.name = name;
+      commit(w);
+    },
+    [commit],
+  );
+
+  /** 势力表末尾那个「＋」：添一行，名字先给个编号，编号只往前走（不回收删掉的号）。 */
+  const addFactionRow = useCallback(() => {
+    const w = worldRef.current;
+    if (!w) return;
+    const f = addFaction(w, '新势力 ' + String(w.factions.length + 1));
+    commit(w);
+    setNote('新增势力：' + f.name + '（#' + String(f.id) + '）');
+    if (api) void api.saveWorld(w);
+  }, [commit]);
+
+  /** 势力表里按「删除」：名下还挂着据点或部队就不删，说明行写清楚还挂着多少。 */
+  const deleteFaction = useCallback(
+    (id: number) => {
+      const w = worldRef.current;
+      if (!w) return;
+      const f = w.factions.find((x) => x.id === id);
+      if (!f) return;
+      const sites = w.sites.filter((s) => s.faction === id).length;
+      const units = w.units.filter((u) => u.faction === id).length;
+      if (sites > 0 || units > 0) {
+        setNote(
+          '「' + f.name + '」名下还有 ' + String(sites) + ' 座据点、' + String(units) +
+            ' 支部队，先把它们改派到别的势力，再删',
+        );
+        return;
+      }
+      w.factions = w.factions.filter((x) => x.id !== id);
+      commit(w);
+      setNote('删掉了势力「' + f.name + '」（#' + String(id) + '）');
+      if (api) void api.saveWorld(w);
+    },
+    [commit],
+  );
+
   /** 地图上双击：在双击的位置新增一个据点，名字先给个编号，其余用最小默认值。 */
   const addSiteAt = useCallback(
     (x: number, y: number) => {
@@ -326,6 +374,7 @@ export function App() {
     ? '第 ' + year(world, params) + ' 年 ' + month(world, params) + ' 月 ' + dayOfMonth(world, params) + ' 日'
     : '—';
   const counts: Record<View, number> = {
+    factions: world ? world.factions.length : 0,
     sites: world ? world.sites.length : 0,
     units: world ? world.units.length : 0,
     links: world ? world.links.length : 0,
@@ -402,7 +451,14 @@ export function App() {
                 onCancelPick={cancelPick}
               />
             </div>
-            {view === 'sites' ? (
+            {view === 'factions' ? (
+              <FactionTable
+                world={world}
+                onRename={renameFaction}
+                onDelete={deleteFaction}
+                onAdd={addFactionRow}
+              />
+            ) : view === 'sites' ? (
               <SiteTable
                 world={world}
                 onEdit={editSite}

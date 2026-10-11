@@ -1,6 +1,6 @@
-// The three views of one switchable table: sites, units, links.
+// The four views of one switchable table: factions, sites, units, links.
 // Anything the designer may edit is an input; derived values (position, order
-// queue) stay read-only text.
+// queue, the five totals on a faction row) stay read-only text.
 import { useRef, useState } from 'react';
 import type { Link, Order, Site, Terrain, Unit, World } from '../engine/types.ts';
 import { linkLength } from '../engine/world.ts';
@@ -20,24 +20,36 @@ function round1(v: number): number {
 /** 上级那一格写这个字代表「没有上级」。它也在可选名字里，所以能被重新清掉。 */
 const NO_PARENT = '（无）';
 
+/**
+ * 候选列表里的一条。写回世界的是 id，名字只用来显示与过滤——
+ * 名字允许重复，两处同名时按回车不写回，靠候选里跟着的编号分。
+ */
+interface PickItem {
+  id: number;
+  /** 格子里与候选里显示的名字。 */
+  name: string;
+  /** 候选里跟在名字后面的编号（「#5」这种）；「（无）」这一类没有编号，就不写。 */
+  tag?: string;
+}
+
 interface NamePickerProps {
-  /** 现在这个名字。 */
+  /** 现在这一条的名字，格子里显示它。 */
   value: string;
-  /** 可选的全部名字，按这个顺序给出。 */
-  names: string[];
+  /** 可选的全部条目。 */
+  items: PickItem[];
   /** 这一格挑的是什么，用来写提示：势力 / 上级。 */
   label: string;
-  /** 留空按回车时当作选中了哪个名字；不传就是留空不算数。 */
-  emptyPick?: string;
-  /** 按回车或点候选时才调它。 */
-  onPick: (name: string) => void;
+  /** 留空按回车时当作选中了哪一条；不传就是留空不算数。 */
+  emptyPick?: PickItem;
+  /** 按回车或点候选时才调它，参数是挑中的那一条。 */
+  onPick: (item: PickItem) => void;
 }
 
 /**
- * 按名字挑一个东西：敲名字只用来过滤，写回发生在按回车（与某个名字完全相同）或点候选的时候。
- * 几百个势力或据点时下拉挑不动，敲两三个字就缩到一两条。
+ * 按名字挑一个东西：敲名字只用来过滤，写回发生在按回车（与某一条的名字完全相同，
+ * 且这样的只有一条）或点候选的时候。几百个势力或据点时下拉挑不动，敲两三个字就缩到一两条。
  */
-function NamePicker({ value, names, label, emptyPick, onPick }: NamePickerProps) {
+function NamePicker({ value, items, label, emptyPick, onPick }: NamePickerProps) {
   const [draft, setDraft] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   // 格子下面放不下候选列表时就改成往上展开。
@@ -45,14 +57,18 @@ function NamePicker({ value, names, label, emptyPick, onPick }: NamePickerProps)
   const inputRef = useRef<HTMLInputElement | null>(null);
   const text = draft === null ? value : draft;
   const typed = text.trim();
-  // 打进去的字一个名字都对不上就标红；空着不算错，只是还没填。
-  const bad = typed !== '' && !names.includes(typed);
-  const hits = typed === '' ? names : names.filter((n) => n.includes(typed));
+  // 敲进去的字与哪几条的名字完全相同。名字允许重复，所以这里可能不止一条。
+  const exact = items.filter((i) => i.name === typed);
+  const only = exact.length === 1 ? exact[0] : undefined;
+  // 只有 User 自己往里敲过字才判对错：一条都对不上、或者对上不止一条（同名）都算没挑定，
+  // 字留在格子里并把格子标红。draft 是 null 表示这一格没在改，那时不判——挂着的本来就可能是个重名的名字。
+  const bad = draft !== null && typed !== '' && only === undefined;
+  const hits = typed === '' ? items : items.filter((i) => i.name.includes(typed));
   const shown = hits.slice(0, 6);
 
-  /** 只有按回车（与某个名字完全相同）或点候选才走到这里。 */
-  const commit = (name: string) => {
-    onPick(name);
+  /** 只有按回车（同名只有一个）或点候选才走到这里。 */
+  const commit = (item: PickItem) => {
+    onPick(item);
     setDraft(null);
   };
 
@@ -63,7 +79,13 @@ function NamePicker({ value, names, label, emptyPick, onPick }: NamePickerProps)
         className={bad ? 'bad' : undefined}
         value={text}
         placeholder={label}
-        title={bad ? '没有这个' + label + '：按回车写回对得上的名字，或按 Esc 收回原来的名字' : label}
+        title={
+          bad
+            ? exact.length > 1
+              ? '有 ' + String(exact.length) + ' 个同名的' + label + '：从候选里点一个'
+              : '没有这个' + label + '：按回车写回对得上的名字，或按 Esc 收回原来的名字'
+            : label
+        }
         onFocus={() => {
           const el = inputRef.current;
           // 候选列表最高 190 像素，再加一点余量。
@@ -75,7 +97,7 @@ function NamePicker({ value, names, label, emptyPick, onPick }: NamePickerProps)
         onKeyDown={(e) => {
           if (e.key === 'Enter') {
             if (typed === '' && emptyPick !== undefined) commit(emptyPick);
-            else if (names.includes(typed)) commit(typed);
+            else if (only !== undefined) commit(only);
           } else if (e.key === 'Escape') {
             setDraft(null);
             setOpen(false);
@@ -84,16 +106,17 @@ function NamePicker({ value, names, label, emptyPick, onPick }: NamePickerProps)
       />
       {open ? (
         <div className={up ? 'picklist up' : 'picklist'}>
-          {shown.map((n) => (
+          {shown.map((item) => (
             <button
-              key={n}
+              key={item.id}
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => {
-                commit(n);
+                commit(item);
                 setOpen(false);
               }}
             >
-              {n}
+              {item.name}
+              {item.tag === undefined ? null : <span className="tag"> {item.tag}</span>}
             </button>
           ))}
           {hits.length > shown.length ? (
@@ -103,6 +126,103 @@ function NamePicker({ value, names, label, emptyPick, onPick }: NamePickerProps)
         </div>
       ) : null}
     </div>
+  );
+}
+
+/** 势力那一格的可挑条目：名字后面跟着编号，两个势力重名时靠编号分。 */
+function factionItems(world: World): PickItem[] {
+  return world.factions.map((f) => ({ id: f.id, name: f.name, tag: '#' + String(f.id) }));
+}
+
+interface FactionTableProps {
+  world: World;
+  /** 改名字：与别的表一样就地改，等月末那一次自动保存。 */
+  onRename: (id: number, name: string) => void;
+  /** 点「删除」（第二下）：名下还挂着据点或部队就会被挡回来，说明行写清楚还挂着多少。 */
+  onDelete: (id: number) => void;
+  /** 末尾那一行的「＋」：添一个新势力。 */
+  onAdd: () => void;
+}
+
+/**
+ * 势力表。名字能改，后面五列都是算出来的：名下有几座据点、几支部队，
+ * 这些部队的兵力加总，以及这些据点自存的金钱与粮草（部队随身带着的那份不算在粮里）。
+ */
+export function FactionTable({ world, onRename, onDelete, onAdd }: FactionTableProps) {
+  // 删除要按两下：第一下把按钮换成「确认删除」，鼠标移开这一行就收回。
+  const [confirm, setConfirm] = useState(0);
+
+  const rows = world.factions.map((f) => {
+    const sites = world.sites.filter((s) => s.faction === f.id);
+    const units = world.units.filter((u) => u.faction === f.id);
+    return {
+      faction: f,
+      sites: sites.length,
+      units: units.length,
+      troops: units.reduce((sum, u) => sum + u.troops, 0),
+      money: sites.reduce((sum, s) => sum + s.money, 0),
+      food: sites.reduce((sum, s) => sum + s.food, 0),
+    };
+  });
+
+  return (
+    <table>
+      <thead>
+        <tr>
+          <th>名字</th>
+          <th>据点</th>
+          <th>部队</th>
+          <th>兵力</th>
+          <th>钱</th>
+          <th>粮</th>
+          <th>删除</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.length === 0 ? (
+          <tr>
+            <td className="ro" colSpan={7}>
+              还没有势力。按下面那一行的「＋」新建一个。
+            </td>
+          </tr>
+        ) : (
+          rows.map((r) => (
+            <tr key={r.faction.id} onMouseLeave={() => setConfirm(0)}>
+              <td>
+                <input value={r.faction.name} onChange={(e) => onRename(r.faction.id, e.target.value)} />
+              </td>
+              <td className="ro">{r.sites}</td>
+              <td className="ro">{r.units}</td>
+              <td className="ro">{round1(r.troops)}</td>
+              <td className="ro">{round1(r.money)}</td>
+              <td className="ro">{round1(r.food)}</td>
+              <td>
+                <button
+                  className={confirm === r.faction.id ? 'danger' : undefined}
+                  onClick={() => {
+                    if (confirm === r.faction.id) {
+                      setConfirm(0);
+                      onDelete(r.faction.id);
+                      return;
+                    }
+                    setConfirm(r.faction.id);
+                  }}
+                >
+                  {confirm === r.faction.id ? '确认删除' : '删除'}
+                </button>
+              </td>
+            </tr>
+          ))
+        )}
+      </tbody>
+      <tfoot>
+        <tr>
+          <td colSpan={7}>
+            <button onClick={onAdd}>＋ 新增势力</button>
+          </td>
+        </tr>
+      </tfoot>
+    </table>
   );
 }
 
@@ -191,28 +311,23 @@ export function SiteTable({ world, onEdit, startSite, onPick, onLocate }: SiteTa
             <td>
               <NamePicker
                 value={factionName(world, s.faction)}
-                names={world.factions.map((f) => f.name)}
+                items={factionItems(world)}
                 label="势力"
-                onPick={(name) => {
-                  const f = world.factions.find((x) => x.name === name);
-                  if (f) onEdit(s.id, { faction: f.id });
-                }}
+                onPick={(item) => onEdit(s.id, { faction: item.id })}
               />
             </td>
             <td>
               <NamePicker
                 value={s.parent === null ? NO_PARENT : siteName(world, s.parent)}
-                names={[NO_PARENT, ...world.sites.filter((x) => x.id !== s.id).map((x) => x.name)]}
+                items={[
+                  { id: 0, name: NO_PARENT },
+                  ...world.sites
+                    .filter((x) => x.id !== s.id)
+                    .map((x) => ({ id: x.id, name: x.name, tag: '#' + String(x.id) })),
+                ]}
                 label="上级"
-                emptyPick={NO_PARENT}
-                onPick={(name) => {
-                  if (name === NO_PARENT) {
-                    onEdit(s.id, { parent: null });
-                    return;
-                  }
-                  const p = world.sites.find((x) => x.name === name && x.id !== s.id);
-                  if (p) onEdit(s.id, { parent: p.id });
-                }}
+                emptyPick={{ id: 0, name: NO_PARENT }}
+                onPick={(item) => onEdit(s.id, { parent: item.id === 0 ? null : item.id })}
               />
             </td>
             <td>
@@ -283,12 +398,9 @@ export function UnitTable({ world, onEdit, onOrder, onPickDestination, pickingUn
             <td>
               <NamePicker
                 value={factionName(world, u.faction)}
-                names={world.factions.map((f) => f.name)}
+                items={factionItems(world)}
                 label="势力"
-                onPick={(name) => {
-                  const f = world.factions.find((x) => x.name === name);
-                  if (f) onEdit(u.id, { faction: f.id });
-                }}
+                onPick={(item) => onEdit(u.id, { faction: item.id })}
               />
             </td>
             <td>

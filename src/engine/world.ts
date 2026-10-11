@@ -4,8 +4,13 @@ export function emptyWorld(): World {
   return { day: 0, factions: [], sites: [], units: [], links: [], log: [], pending: null };
 }
 
+/**
+ * 新的编号取当前最大编号加一。删掉的编号不回收——旧存档里指到那个编号的据点与部队
+ * 会直接认到新势力头上，那比编号不连号难查得多。
+ */
 export function addFaction(world: World, name: string): Faction {
-  const f: Faction = { id: world.factions.length + 1, name };
+  const id = world.factions.reduce((max, f) => Math.max(max, f.id), 0) + 1;
+  const f: Faction = { id, name };
   world.factions.push(f);
   return f;
 }
