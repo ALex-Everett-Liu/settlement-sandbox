@@ -4,7 +4,8 @@
 import { Application, Container, Graphics, Text } from 'pixi.js';
 import { useEffect, useRef, useState } from 'react';
 import { mulberry32 } from '../engine/rng.ts';
-import type { Params, Site, Theme, World } from '../engine/types.ts';
+import type { Params, Site, Theme, Unit, World } from '../engine/types.ts';
+import { placeText } from './format.ts';
 
 /** 生成地形用的固定种子：同一份参数每次生成出同一张图。 */
 const TERRAIN_SEED = 20261011;
@@ -48,6 +49,7 @@ interface Scene {
   siteLabel: Map<number, Text>;
   unitGfx: Map<number, Graphics>;
   gfxToSite: Map<Graphics, number>;
+  unitGfxToUnit: Map<Graphics, number>;
   palette: Palette;
   zoom: number;
   /** 正在挑的起点据点；没有就是 null。只影响据点圆点画成什么颜色。 */
@@ -201,7 +203,7 @@ function syncSites(scene: Scene, world: World): void {
 
 /** 部队记号：在据点里贴在据点边上，在路上按进度插值。每推进一天都会调一次，很便宜。 */
 function syncUnits(scene: Scene, world: World): void {
-  const { units, unitGfx, palette } = scene;
+  const { units, unitGfx, unitGfxToUnit, palette } = scene;
   const seen = new Set<number>();
 
   for (const u of world.units) {
@@ -211,22 +213,20 @@ function syncUnits(scene: Scene, world: World): void {
       g = new Graphics();
       g.poly([0, -6, 6, 0, 0, 6, -6, 0], true);
       g.fill({ color: palette.unit });
+      // 记号要能命中，浮层才知道指的是哪一支部队。容器是 passive 时，子对象照样可以设成 static。
+      g.eventMode = 'static';
+      g.cursor = 'pointer';
       units.addChild(g);
       unitGfx.set(u.id, g);
+      unitGfxToUnit.set(g, u.id);
     }
-    const pl = u.place;
-    if (pl.kind === 'site') {
-      const s = world.sites.find((x) => x.id === pl.site);
-      if (s) g.position.set(s.x + 8, s.y + 8);
-    } else {
-      const a = world.sites.find((x) => x.id === pl.from);
-      const b = world.sites.find((x) => x.id === pl.to);
-      if (a && b) g.position.set(a.x + (b.x - a.x) * pl.t, a.y + (b.y - a.y) * pl.t);
-    }
+    const p = unitWorldPos(world, u);
+    if (p) g.position.set(p.x, p.y);
   }
 
   for (const [id, g] of unitGfx) {
     if (seen.has(id)) continue;
+    unitGfxToUnit.delete(g);
     g.destroy();
     unitGfx.delete(id);
   }
@@ -256,6 +256,23 @@ function redraw(scene: Scene, world: World, params: Params): void {
   }
 }
 
+/** 悬停浮层的内容：指到据点就显示据点，指到部队记号就显示那支部队。x／y 是浮层左上角。 */
+type Hover =
+  | { kind: 'site'; site: Site; x: number; y: number }
+  | { kind: 'unit'; unit: Unit; x: number; y: number };
+
+/** 部队记号在世界里的位置：停在据点里就贴在那个据点边上，在路上按行军进度插值。 */
+function unitWorldPos(world: World, u: Unit): { x: number; y: number } | null {
+  const pl = u.place;
+  if (pl.kind === 'site') {
+    const s = world.sites.find((x) => x.id === pl.site);
+    return s ? { x: s.x + 8, y: s.y + 8 } : null;
+  }
+  const a = world.sites.find((x) => x.id === pl.from);
+  const b = world.sites.find((x) => x.id === pl.to);
+  return a && b ? { x: a.x + (b.x - a.x) * pl.t, y: a.y + (b.y - a.y) * pl.t } : null;
+}
+
 export interface MapViewProps {
   world: World;
   params: Params;
@@ -278,7 +295,7 @@ export function MapView({ world, params, theme, startSite, onAddSite, onPickSite
   const paramsRef = useRef(params);
   const [showTerrain, setShowTerrain] = useState(true);
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
-  const [hover, setHover] = useState<{ site: Site; x: number; y: number } | null>(null);
+  const [hover, setHover] = useState<Hover | null>(null);
 
   addSiteRef.current = onAddSite;
   pickRef.current = onPickSite;
@@ -303,6 +320,7 @@ export function MapView({ world, params, theme, startSite, onAddSite, onPickSite
       siteLabel: new Map(),
       unitGfx: new Map(),
       gfxToSite: new Map(),
+      unitGfxToUnit: new Map(),
       palette: PALETTES[theme],
       zoom: 1,
       start: startSite,
@@ -320,9 +338,10 @@ export function MapView({ world, params, theme, startSite, onAddSite, onPickSite
         scene.app.stage.addChild(scene.root);
         scene.root.addChild(scene.terrain, scene.grid, scene.links, scene.sites, scene.units);
         // PixiJS 只把冒泡事件通知给 eventMode 是 static／dynamic 的对象，容器的默认值是 passive，
-        // 于是 notifyTarget 对 passive 的容器第一句就 return。想在这个容器上听子对象的
-        // pointerover／pointerout，它自己必须是 static。
+        // 于是 notifyTarget 对 passive 的容器第一句就 return。想在这两个容器上听子对象的
+        // pointerover／pointerout，它们自己必须是 static。
         scene.sites.eventMode = 'static';
+        scene.units.eventMode = 'static';
 
         const width = scene.app.screen.width;
         const height = scene.app.screen.height;
@@ -407,26 +426,46 @@ export function MapView({ world, params, theme, startSite, onAddSite, onPickSite
         canvas.addEventListener('pointerleave', () => setCursor(null));
         canvas.addEventListener('dblclick', onDouble);
 
+        // 停 200 毫秒再弹浮层：鼠标扫过去不算。据点与部队记号两种浮层共用这一个计时器。
+        const armHover = (build: () => Hover | null) => {
+          if (hoverTimer.current !== null) window.clearTimeout(hoverTimer.current);
+          hoverTimer.current = window.setTimeout(() => {
+            const h = build();
+            if (h) setHover(h);
+          }, 200);
+        };
+        const dropHover = () => {
+          if (hoverTimer.current !== null) window.clearTimeout(hoverTimer.current);
+          setHover(null);
+        };
+
+        // 浮层的 left／top 是相对 .mapwrap 算的；画布在 .mapwrap 里的位置用 offsetLeft／offsetTop 补上，
+        // 不能再减画布相对视口的 rect.left／rect.top。
+        const overlayX = (wx: number) => canvas.offsetLeft + scene.root.position.x + wx * scene.zoom;
+        const overlayY = (wy: number) => canvas.offsetTop + scene.root.position.y - wy * scene.zoom;
+
         scene.sites.on('pointerover', (e) => {
           const id = scene.gfxToSite.get(e.target as Graphics);
           if (id === undefined) return;
-          if (hoverTimer.current !== null) window.clearTimeout(hoverTimer.current);
-          hoverTimer.current = window.setTimeout(() => {
+          armHover(() => {
             const s = worldRef.current.sites.find((x) => x.id === id);
-            if (!s) return;
-            // 浮层的 left／top 是相对 .mapwrap 算的；画布在 .mapwrap 里的位置用 offsetLeft／offsetTop 补上，
-            // 不能再减画布相对视口的 rect.left／rect.top。
-            setHover({
-              site: s,
-              x: canvas.offsetLeft + scene.root.position.x + s.x * scene.zoom,
-              y: canvas.offsetTop + scene.root.position.y - s.y * scene.zoom,
-            });
-          }, 200);
+            return s ? { kind: 'site', site: s, x: overlayX(s.x), y: overlayY(s.y) } : null;
+          });
         });
-        scene.sites.on('pointerout', () => {
-          if (hoverTimer.current !== null) window.clearTimeout(hoverTimer.current);
-          setHover(null);
+        scene.sites.on('pointerout', dropHover);
+
+        scene.units.on('pointerover', (e) => {
+          const id = scene.unitGfxToUnit.get(e.target as Graphics);
+          if (id === undefined) return;
+          armHover(() => {
+            const w = worldRef.current;
+            const u = w.units.find((x) => x.id === id);
+            if (!u) return null;
+            const p = unitWorldPos(w, u);
+            return p ? { kind: 'unit', unit: u, x: overlayX(p.x), y: overlayY(p.y) } : null;
+          });
         });
+        scene.units.on('pointerout', dropHover);
       });
 
     return () => {
@@ -484,7 +523,7 @@ export function MapView({ world, params, theme, startSite, onAddSite, onPickSite
         <label className="dim small">
           <input type="checkbox" checked={showTerrain} onChange={(e) => setShowTerrain(e.target.checked)} /> 生成的地形层
         </label>
-        <span className="dim small">滚轮缩放 · 拖动平移 · 双击空白处新增据点 · 单击据点挑起点／终点</span>
+        <span className="dim small">滚轮缩放 · 拖动平移 · 双击空白处新增据点 · 单击据点挑起点／终点 · 指到据点或部队看它的数</span>
         {startSite !== null ? (
           <span className="dim small">
             起点：{world.sites.find((s) => s.id === startSite)?.name ?? String(startSite)} · 再点一个据点作终点，Esc 或点空白处取消
@@ -494,16 +533,31 @@ export function MapView({ world, params, theme, startSite, onAddSite, onPickSite
       </div>
       {hover ? (
         <div className="maphover" style={{ left: String(hover.x + 12) + 'px', top: String(hover.y + 12) + 'px' }}>
-          <strong>{hover.site.name}</strong>
-          <div>
-            规模 {hover.site.scale} · 人口 {hover.site.population}
-          </div>
-          <div>
-            民心 {Math.round(hover.site.morale)} · 稳定 {Math.round(hover.site.stability)}
-          </div>
-          <div>
-            坐标 {hover.site.x}, {hover.site.y}
-          </div>
+          {hover.kind === 'site' ? (
+            <>
+              <strong>{hover.site.name}</strong>
+              <div>
+                规模 {hover.site.scale} · 人口 {hover.site.population}
+              </div>
+              <div>
+                民心 {Math.round(hover.site.morale)} · 稳定 {Math.round(hover.site.stability)}
+              </div>
+              <div>
+                坐标 {hover.site.x}, {hover.site.y}
+              </div>
+            </>
+          ) : (
+            <>
+              <strong>{hover.unit.name}</strong>
+              <div>
+                兵力 {hover.unit.troops} · 训练度 {Math.round(hover.unit.training)}
+              </div>
+              <div>
+                组织度 {Math.round(hover.unit.organization)} · 随身粮草 {Math.round(hover.unit.carriedFood * 10) / 10}
+              </div>
+              <div>{placeText(world, hover.unit.place)}</div>
+            </>
+          )}
         </div>
       ) : null}
     </div>
