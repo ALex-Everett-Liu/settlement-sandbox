@@ -89,6 +89,7 @@ function migrate(db: DatabaseSync, dbPath: string, from: number): void {
     db.exec('ROLLBACK');
     throw e;
   }
+  checkpoint(db);
   console.log(
     '[sandbox] 库从 v' + String(from) + ' 升到 v' + String(SCHEMA_VERSION) + '：' + steps.join('；') + '；副本 ' + backupPath,
   );
@@ -115,8 +116,18 @@ function metaSet(db: DatabaseSync, key: string, value: string): void {
   db.prepare('INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v').run(key, value);
 }
 
+/**
+ * 把 WAL 并回主文件。不并的话，最新那一段只存在于 world.db-wal 里：
+ * 看主文件的时间戳会以为没保存，单独复制主文件也会丢掉那一段。
+ * 这一句不能放在事务里。
+ */
+function checkpoint(db: DatabaseSync): void {
+  db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
+}
+
 export function saveParams(db: DatabaseSync, params: Params): void {
   metaSet(db, 'params', JSON.stringify(params));
+  checkpoint(db);
 }
 
 export function loadParams(db: DatabaseSync): Params | null {
@@ -199,6 +210,8 @@ export function saveWorld(db: DatabaseSync, world: World): void {
     db.exec('ROLLBACK');
     throw e;
   }
+
+  checkpoint(db);
 }
 
 export function loadWorld(db: DatabaseSync): World {

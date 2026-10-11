@@ -72,6 +72,17 @@ console.log('\n== 再存一次不该重复写日志 ==');
 saveWorld(db, w);
 check('日志行数没变', logCount(db) === logAfter30, String(logCount(db)));
 
+console.log('\n== 保存之后主文件就是最新的 ==');
+// 主文件单独拿走（不带 -wal）也该是最新的：保存之后 WAL 已经并回去了。
+const mainOnly = path.join(dir, 'main-only.db');
+fs.copyFileSync(dbPath, mainOnly);
+const mainOnlyDb = new DatabaseSync(mainOnly, { readOnly: true });
+const mainDay = Number((mainOnlyDb.prepare("SELECT v FROM meta WHERE k = 'day'").get() as { v: string }).v);
+const mainLog = Number((mainOnlyDb.prepare('SELECT COUNT(*) AS n FROM log').get() as { n: number }).n);
+mainOnlyDb.close();
+check('主文件单独看也是最新的一天', mainDay === 30, String(mainDay));
+check('主文件单独看日志也齐', mainLog === logAfter30, String(mainLog));
+
 console.log('\n== 快照 ==');
 const snap = path.join(dir, 'snap-day30.db');
 await writeSnapshot(db, snap);
