@@ -1,5 +1,6 @@
 // 纯逻辑自检：不碰界面、不碰数据库，直接用 node 跑。
 // 用法：node tools/selftest.ts
+import { answerAsk } from '../src/engine/ask.ts';
 import { DEFAULT_PARAMS } from '../src/engine/params.ts';
 import { mulberry32 } from '../src/engine/rng.ts';
 import { dayOfMonth, isMonthEnd, marchDays, month, tickDay, year } from '../src/engine/tick.ts';
@@ -79,6 +80,56 @@ const u5 = w5.units[0]!;
 const food5 = u5.carriedFood;
 tickDay(w5, p);
 check('粮草按天扣', u5.carriedFood < food5, food5 + ' → ' + u5.carriedFood.toFixed(3));
+
+console.log('\n== 缺数据就问 ==');
+const w6 = demoWorld();
+w6.links[0]!.terrain = null;
+const u6 = w6.units[0]!;
+tickDay(w6, p);
+check(
+  '停在问询上，命令还在队列里',
+  w6.pending !== null && u6.queue.length === 1 && u6.place.kind === 'site',
+);
+check('问的是那条连接', w6.pending?.target.kind === 'linkTerrain');
+check(
+  '选项是地貌五档',
+  w6.pending?.options.length === 5,
+  (w6.pending?.options ?? []).map((o) => o.label).join('、'),
+);
+const dayAtAsk = w6.day;
+tickDay(w6, p);
+check('没回答之前时间轴不走', w6.day === dayAtAsk, '第 ' + w6.day + ' 天');
+check('乱填的值不写回', !answerAsk(w6, 'swamp') && w6.pending !== null);
+check('合法的值写回世界', answerAsk(w6, 'hill') && w6.links[0]!.terrain === 'hill');
+check('答完 pending 清空', w6.pending === null);
+check('答完写了日志', w6.log.some((line) => line.includes('地貌填成 丘陵')));
+tickDay(w6, p);
+check('答完就能出发', u6.place.kind === 'march', '第 ' + w6.day + ' 天');
+
+console.log('\n== 断粮就问 ==');
+const w7 = demoWorld();
+const u7 = w7.units[0]!;
+u7.carriedFood = 10; // 500 兵每天吃 0.833，十来天见底
+let sawAsk = -1;
+for (let d = 0; d < 40 && sawAsk < 0; d += 1) {
+  tickDay(w7, p);
+  if (w7.pending) sawAsk = w7.day;
+}
+check('粮草吃完了就停下来问', sawAsk > 0 && w7.pending?.target.kind === 'unitFoodPolicy', '第 ' + sawAsk + ' 天');
+check('兜里是 0，不是负数', u7.carriedFood === 0);
+const dayAtFoodAsk = w7.day;
+tickDay(w7, p);
+check('没回答之前时间轴不走', w7.day === dayAtFoodAsk);
+check('答完记住了', answerAsk(w7, 'forage') && u7.foodPolicy === 'forage');
+tickDay(w7, p);
+check('回答之后不再问', w7.pending === null && w7.day === dayAtFoodAsk + 1);
+tickDay(w7, p);
+check('没问题可答时 answerAsk 返回 false', !answerAsk(w7, 'forage'));
+check(
+  '断粮那行只记一次',
+  w7.log.filter((line) => line.includes('断粮的处理方式定为')).length === 1,
+  String(w7.log.filter((line) => line.includes('断粮的处理方式定为')).length),
+);
 
 console.log('\n== 存档往返 ==');
 const text = worldToJson(w4);

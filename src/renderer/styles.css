@@ -77,6 +77,43 @@ header {
   font-size: 12px;
 }
 
+/* 引擎停下来问的那个框：居中模态，答完才动别处。 */
+.askbackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgb(0 0 0 / 0.35);
+}
+
+.askbox {
+  width: min(680px, 100%);
+  max-height: 80vh;
+  overflow: auto;
+  padding: 14px 18px 16px;
+  background: var(--field);
+  border: 1px solid var(--acc);
+  border-radius: 4px;
+  box-shadow: 0 10px 40px rgb(0 0 0 / 0.32);
+}
+
+.askbox h3 {
+  margin: 0 0 4px;
+  font-size: 14px;
+  color: var(--acc);
+}
+
+.askbox p {
+  margin: 4px 0;
+}
+
+.askbox input {
+  min-width: 220px;
+}
+
 button,
 select,
 input {

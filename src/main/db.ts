@@ -1,10 +1,24 @@
 // 存档层：世界进 node:sqlite，快照走它自带的 backup。
 // 这一层不引用 Electron，也不碰界面；路径由调用方给，所以能直接用 node 自检。
+import * as fs from 'node:fs';
 import { DatabaseSync, backup } from 'node:sqlite';
-import type { Faction, Id, Link, Order, Params, Place, Site, Terrain, Unit, World } from '../engine/types.ts';
+import type {
+  Ask,
+  Faction,
+  FoodPolicy,
+  Id,
+  Link,
+  Order,
+  Params,
+  Place,
+  Site,
+  Terrain,
+  Unit,
+  World,
+} from '../engine/types.ts';
 import { emptyWorld } from '../engine/world.ts';
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
@@ -17,14 +31,14 @@ CREATE TABLE IF NOT EXISTS sites (
 );
 CREATE TABLE IF NOT EXISTS links (
   id INTEGER PRIMARY KEY, a INTEGER NOT NULL, b INTEGER NOT NULL,
-  distance REAL NOT NULL, terrain TEXT NOT NULL
+  distance REAL NOT NULL, terrain TEXT
 );
 CREATE TABLE IF NOT EXISTS units (
   id INTEGER PRIMARY KEY, faction INTEGER NOT NULL, name TEXT NOT NULL,
   troops INTEGER NOT NULL, training REAL NOT NULL, organization REAL NOT NULL,
   place_kind TEXT NOT NULL, place_site INTEGER, place_link INTEGER,
   place_from INTEGER, place_to INTEGER, place_t REAL,
-  carried_food REAL NOT NULL, queue_json TEXT NOT NULL
+  carried_food REAL NOT NULL, queue_json TEXT NOT NULL, food_policy TEXT
 );
 CREATE TABLE IF NOT EXISTS log (seq INTEGER PRIMARY KEY AUTOINCREMENT, line TEXT NOT NULL);
 `;
@@ -39,10 +53,57 @@ export function openWorldDb(path: string): DatabaseSync {
     db.prepare('INSERT INTO meta (k, v) VALUES (?, ?)').run('schema_version', String(SCHEMA_VERSION));
     db.prepare('INSERT INTO meta (k, v) VALUES (?, ?)').run('day', '0');
     db.prepare('INSERT INTO meta (k, v) VALUES (?, ?)').run('log_count', '0');
-  } else if (Number(row.v) !== SCHEMA_VERSION) {
+    return db;
+  }
+  const from = Number(row.v);
+  if (from > SCHEMA_VERSION) {
     throw new Error('存档的 schema 版本是 ' + String(row.v) + '，本程序认的是 ' + String(SCHEMA_VERSION));
   }
+  if (from < SCHEMA_VERSION) migrate(db, path, from);
   return db;
+}
+
+/**
+ * 旧库升级。目前只有一条路：v1 → v2。
+ * v2 的两处：links.terrain 允许空（缺地貌要存得下），units 加 food_policy 列。
+ * 整段在一个事务里跑；升级之前先留一份完整副本。
+ */
+function migrate(db: DatabaseSync, dbPath: string, from: number): void {
+  const backupPath = keepBackup(db, dbPath, from);
+  const steps: string[] = [];
+  db.exec('BEGIN');
+  try {
+    if (!hasColumn(db, 'units', 'food_policy')) {
+      db.exec('ALTER TABLE units ADD COLUMN food_policy TEXT');
+      steps.push('units 加 food_policy');
+    }
+    // SQLite 改不了现成列的 NOT NULL，只能把那张表按新定义重建一次。
+    db.exec('CREATE TABLE links_v2 (id INTEGER PRIMARY KEY, a INTEGER NOT NULL, b INTEGER NOT NULL, distance REAL NOT NULL, terrain TEXT)');
+    db.exec('INSERT INTO links_v2 (id, a, b, distance, terrain) SELECT id, a, b, distance, terrain FROM links');
+    db.exec('DROP TABLE links');
+    db.exec('ALTER TABLE links_v2 RENAME TO links');
+    steps.push('links.terrain 改为可空');
+    metaSet(db, 'schema_version', String(SCHEMA_VERSION));
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+  console.log(
+    '[sandbox] 库从 v' + String(from) + ' 升到 v' + String(SCHEMA_VERSION) + '：' + steps.join('；') + '；副本 ' + backupPath,
+  );
+}
+
+/** 升级前留一份副本。已经有那一版的副本就不再动它；VACUUM INTO 是同步的，产出的是一份干净的库。 */
+function keepBackup(db: DatabaseSync, dbPath: string, from: number): string {
+  const target = dbPath.replace(/\.db$/i, '') + '.v' + String(from) + '-backup.db';
+  if (!fs.existsSync(target)) db.exec("VACUUM INTO '" + target.replace(/'/g, "''") + "'");
+  return target;
+}
+
+function hasColumn(db: DatabaseSync, table: string, column: string): boolean {
+  const rows = db.prepare("SELECT name FROM pragma_table_info('" + table + "')").all() as Array<{ name: string }>;
+  return rows.some((r) => r.name === column);
 }
 
 function metaGet(db: DatabaseSync, key: string): string | undefined {
@@ -106,8 +167,8 @@ export function saveWorld(db: DatabaseSync, world: World): void {
 
     const insUnit = db.prepare(
       'INSERT INTO units (id, faction, name, troops, training, organization, place_kind, place_site,' +
-        ' place_link, place_from, place_to, place_t, carried_food, queue_json)' +
-        ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        ' place_link, place_from, place_to, place_t, carried_food, queue_json, food_policy)' +
+        ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     );
     for (const u of world.units) {
       const p = u.place;
@@ -119,7 +180,7 @@ export function saveWorld(db: DatabaseSync, world: World): void {
         p.kind === 'site' ? null : p.from,
         p.kind === 'site' ? null : p.to,
         p.kind === 'site' ? null : p.t,
-        u.carriedFood, JSON.stringify(u.queue),
+        u.carriedFood, JSON.stringify(u.queue), u.foodPolicy,
       );
     }
 
@@ -132,6 +193,7 @@ export function saveWorld(db: DatabaseSync, world: World): void {
 
     metaSet(db, 'day', String(world.day));
     metaSet(db, 'log_count', String(world.log.length));
+    metaSet(db, 'pending', JSON.stringify(world.pending));
     db.exec('COMMIT');
   } catch (e) {
     db.exec('ROLLBACK');
@@ -142,6 +204,8 @@ export function saveWorld(db: DatabaseSync, world: World): void {
 export function loadWorld(db: DatabaseSync): World {
   const w = emptyWorld();
   w.day = Number(metaGet(db, 'day') ?? '0');
+  const pendingRaw = metaGet(db, 'pending');
+  w.pending = pendingRaw ? (JSON.parse(pendingRaw) as Ask | null) : null;
 
   for (const r of db.prepare('SELECT * FROM factions ORDER BY id').all() as Array<Record<string, unknown>>) {
     w.factions.push({ id: Number(r['id']), name: String(r['name']) } satisfies Faction);
@@ -157,7 +221,8 @@ export function loadWorld(db: DatabaseSync): World {
   for (const r of db.prepare('SELECT * FROM links ORDER BY id').all() as Array<Record<string, unknown>>) {
     w.links.push({
       id: Number(r['id']), a: Number(r['a']), b: Number(r['b']),
-      distance: Number(r['distance']), terrain: String(r['terrain']) as Terrain,
+      distance: Number(r['distance']),
+      terrain: r['terrain'] === null ? null : (String(r['terrain']) as Terrain),
     } satisfies Link);
   }
   for (const r of db.prepare('SELECT * FROM units ORDER BY id').all() as Array<Record<string, unknown>>) {
@@ -176,6 +241,7 @@ export function loadWorld(db: DatabaseSync): World {
       id: Number(r['id']), faction: Number(r['faction']), name: String(r['name']),
       troops: Number(r['troops']), training: Number(r['training']), organization: Number(r['organization']),
       place, carriedFood: Number(r['carried_food']),
+      foodPolicy: r['food_policy'] === null || r['food_policy'] === undefined ? null : (String(r['food_policy']) as FoodPolicy),
       queue: JSON.parse(String(r['queue_json'])) as Order[],
     } satisfies Unit);
   }

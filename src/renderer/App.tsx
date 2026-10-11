@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { answerAsk } from '../engine/ask.ts';
 import { DEFAULT_PARAMS } from '../engine/params.ts';
 import { dayOfMonth, month, tickDay, year } from '../engine/tick.ts';
 import type { Link, Order, Params, Site, Theme, Unit, World } from '../engine/types.ts';
@@ -82,6 +83,12 @@ export function App() {
   }, [running, speed, params, commit]);
 
   const day = world ? world.day : 0;
+  const stopped = world !== null && world.pending !== null;
+
+  // 引擎停住了就别让时间轴空转：切回暂停，界面上才看得出为什么日期不动。
+  useEffect(() => {
+    if (stopped) setRunning(false);
+  }, [stopped]);
 
   // 每到月末自动存一次。
   useEffect(() => {
@@ -170,6 +177,22 @@ export function App() {
     if (api) void api.saveParams(next);
   }, [params, theme]);
 
+  // 把答案写回世界并存一次：这类回答不该等到月末那一次自动保存。
+  const answer = useCallback(
+    (value: string) => {
+      const w = worldRef.current;
+      if (!w) return;
+      if (!answerAsk(w, value)) {
+        setNote('这个值写不回去：' + value);
+        return;
+      }
+      commit(w);
+      setNote('回答记下了');
+      if (api) void api.saveWorld(w);
+    },
+    [commit],
+  );
+
   const calendar = world
     ? '第 ' + year(world, params) + ' 年 ' + month(world, params) + ' 月 ' + dayOfMonth(world, params) + ' 日'
     : '—';
@@ -236,6 +259,49 @@ export function App() {
           {logTail.length === 0 ? <p className="dim">还没有日志。</p> : <ol>{logTail.map((line, i) => <li key={i}>{line}</li>)}</ol>}
         </section>
       </main>
+
+      {world && world.pending ? (
+        <AskBox key={world.pending.subject + world.pending.question} world={world} onAnswer={answer} />
+      ) : null}
+    </div>
+  );
+}
+
+/** 引擎停下来问的那个框：点一个选项，或者自己填一个值。 */
+function AskBox({ world, onAnswer }: { world: World; onAnswer: (value: string) => void }) {
+  const ask = world.pending;
+  const [value, setValue] = useState(ask ? ask.fallback : '');
+  if (!ask) return null;
+
+  const fallbackLabel = ask.options.find((o) => o.value === ask.fallback)?.label ?? ask.fallback;
+
+  return (
+    <div className="askbackdrop">
+      <div className="askbox">
+        <h3>引擎停住了，等一个回答</h3>
+        <p className="dim small">{ask.subject}</p>
+        <p>{ask.question}</p>
+        <div className="row">
+          {ask.options.map((o) => (
+            <button key={o.value} className={value === o.value ? 'tab active' : 'tab'} onClick={() => setValue(o.value)}>
+              {o.label}
+            </button>
+          ))}
+        </div>
+        <div className="row">
+          <input
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') onAnswer(value);
+            }}
+          />
+          <button className="primary" onClick={() => onAnswer(value)}>
+            就这样
+          </button>
+        </div>
+        <p className="dim small">默认值是「{fallbackLabel}」，也可以自己填一个值。</p>
+      </div>
     </div>
   );
 }

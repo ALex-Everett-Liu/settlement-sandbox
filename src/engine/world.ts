@@ -1,7 +1,7 @@
 import type { Faction, Id, Link, Site, Terrain, Unit, World } from './types.ts';
 
 export function emptyWorld(): World {
-  return { day: 0, factions: [], sites: [], units: [], links: [], log: [] };
+  return { day: 0, factions: [], sites: [], units: [], links: [], log: [], pending: null };
 }
 
 export function addFaction(world: World, name: string): Faction {
@@ -16,7 +16,7 @@ export function addSite(world: World, site: Omit<Site, 'id'>): Site {
   return s;
 }
 
-export function addLink(world: World, a: Id, b: Id, distance: number, terrain: Terrain): Link {
+export function addLink(world: World, a: Id, b: Id, distance: number, terrain: Terrain | null): Link {
   const l: Link = { id: world.links.length + 1, a, b, distance, terrain };
   world.links.push(l);
   return l;
@@ -30,6 +30,17 @@ export function addUnit(world: World, unit: Omit<Unit, 'id'>): Unit {
 
 export function siteById(world: World, id: Id): Site | undefined {
   return world.sites.find((s) => s.id === id);
+}
+
+/** 据点名，找不到就用编号顶上。日志与问询都用它。 */
+export function siteName(world: World, id: Id): string {
+  const s = siteById(world, id);
+  return s ? s.name : '据点 ' + String(id);
+}
+
+/** 连接的名字：两端据点。 */
+export function linkName(world: World, link: Link): string {
+  return siteName(world, link.a) + ' — ' + siteName(world, link.b);
 }
 
 export function linkById(world: World, id: Id): Link | undefined {
@@ -76,7 +87,7 @@ export function demoWorld(): World {
 
   addUnit(w, {
     faction: wei.id, name: '甲队', troops: 500, training: 50, organization: 100,
-    place: { kind: 'site', site: a.id }, carriedFood: 100,
+    place: { kind: 'site', site: a.id }, carriedFood: 100, foodPolicy: null,
     queue: [{ kind: 'march', to: b.id }],
   });
 

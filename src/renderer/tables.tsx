@@ -242,9 +242,10 @@ export function LinkTable({ world, onEdit }: LinkTableProps) {
             </td>
             <td>
               <select
-                value={l.terrain}
-                onChange={(e) => onEdit(l.id, { terrain: e.target.value as Terrain })}
+                value={l.terrain ?? ''}
+                onChange={(e) => onEdit(l.id, { terrain: e.target.value === '' ? null : (e.target.value as Terrain) })}
               >
+                <option value="">（未填）</option>
                 {TERRAINS.map((t) => (
                   <option key={t} value={t}>
                     {TERRAIN_LABEL[t]}

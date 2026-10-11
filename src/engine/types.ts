@@ -5,6 +5,9 @@ export type Id = number;
 /** 地貌五档。影响野战宽度、行军速度、守方加成、粮草产出。 */
 export type Terrain = 'plain' | 'hill' | 'mountain' | 'water' | 'pass';
 
+/** 断粮时的处理方式（设计 §五 第 11 条）。每支部队各记各的。 */
+export type FoodPolicy = 'attrition' | 'forage' | 'restrict';
+
 /** 部队在哪：据点里、连接上行军、连接上扎营。 */
 export type Place =
   | { kind: 'site'; site: Id }
@@ -13,6 +16,26 @@ export type Place =
 
 /** 队列里的一条命令。目前只有「继续走」与「原地待命」。 */
 export type Order = { kind: 'hold' } | { kind: 'march'; to: Id };
+
+/** 一个选项：value 写回世界，label 给人看。 */
+export interface AskOption {
+  value: string;
+  label: string;
+}
+
+/** 答案写回哪一处。每一种问询都知道自己改哪个字段。 */
+export type AskTarget = { kind: 'linkTerrain'; link: Id } | { kind: 'unitFoodPolicy'; unit: Id };
+
+/** 引擎停下来问 User 的一件事。 */
+export interface Ask {
+  /** 问的是谁，界面拿它当标题。 */
+  subject: string;
+  question: string;
+  options: AskOption[];
+  /** 默认值：直接确认就用它。 */
+  fallback: string;
+  target: AskTarget;
+}
 
 export interface Faction {
   id: Id;
@@ -51,6 +74,8 @@ export interface Unit {
   place: Place;
   /** 随身粮草，出城时从所在据点领。 */
   carriedFood: number;
+  /** 断粮时怎么办。null 表示还没问过 User。 */
+  foodPolicy: FoodPolicy | null;
   queue: Order[];
 }
 
@@ -59,7 +84,8 @@ export interface Link {
   a: Id;
   b: Id;
   distance: number;
-  terrain: Terrain;
+  /** null 表示这条连接还没填地貌。引擎不许自己挑一档，会停下来问。 */
+  terrain: Terrain | null;
 }
 
 export interface World {
@@ -71,6 +97,8 @@ export interface World {
   links: Link[];
   /** 日志。现在是事件级的，还没有做到「每支部队每天一行」。 */
   log: string[];
+  /** 引擎停在这里等 User 回答；不为 null 时时间轴一天也不往前走。 */
+  pending: Ask | null;
 }
 
 /** UI theme. Not a settlement number, but it rides with the world, so it lives here. */

@@ -1,17 +1,10 @@
 // Renderer-side formatting: engine enums and positions become Chinese labels.
 // Nothing here mutates the world.
-import type { Order, Place, Terrain, Unit, World } from '../engine/types.ts';
+import { TERRAIN_LABEL, TERRAINS } from '../engine/labels.ts';
+import type { Order, Place, Unit, World } from '../engine/types.ts';
 
-export const TERRAIN_LABEL: Record<Terrain, string> = {
-  plain: '平原',
-  hill: '丘陵',
-  mountain: '山地',
-  water: '水域',
-  pass: '隘口',
-};
-
-/** Fixed order, so the terrain dropdown does not follow object key order. */
-export const TERRAINS: Terrain[] = ['plain', 'hill', 'mountain', 'water', 'pass'];
+// 地貌的名字与顺序由引擎那边给，界面不再各写一份。
+export { TERRAIN_LABEL, TERRAINS };
 
 export function siteName(world: World, id: number): string {
   const site = world.sites.find((s) => s.id === id);
