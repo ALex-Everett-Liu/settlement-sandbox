@@ -1,17 +1,10 @@
 // The three views of one switchable table: sites, units, links.
 // Anything the designer may edit is an input; derived values (position, order
 // queue) stay read-only text.
+import { useRef, useState } from 'react';
 import type { Link, Order, Site, Terrain, Unit, World } from '../engine/types.ts';
 import { linkLength } from '../engine/world.ts';
-import {
-  factionName,
-  orderFromValue,
-  orderText,
-  orderValue,
-  placeText,
-  TERRAIN_LABEL,
-  TERRAINS,
-} from './format.ts';
+import { factionName, orderText, placeText, siteName, TERRAIN_LABEL, TERRAINS } from './format.ts';
 
 function toNumber(text: string, fallback: number): number {
   if (text.trim() === '') return fallback;
@@ -22,6 +15,95 @@ function toNumber(text: string, fallback: number): number {
 /** Display rounding: a raw value like 99.16666666666667 does not fit in a cell. */
 function round1(v: number): number {
   return Math.round(v * 10) / 10;
+}
+
+/** 上级那一格写这个字代表「没有上级」。它也在可选名字里，所以能被重新清掉。 */
+const NO_PARENT = '（无）';
+
+interface NamePickerProps {
+  /** 现在这个名字。 */
+  value: string;
+  /** 可选的全部名字，按这个顺序给出。 */
+  names: string[];
+  /** 这一格挑的是什么，用来写提示：势力 / 上级。 */
+  label: string;
+  /** 留空按回车时当作选中了哪个名字；不传就是留空不算数。 */
+  emptyPick?: string;
+  /** 按回车或点候选时才调它。 */
+  onPick: (name: string) => void;
+}
+
+/**
+ * 按名字挑一个东西：敲名字只用来过滤，写回发生在按回车（与某个名字完全相同）或点候选的时候。
+ * 几百个势力或据点时下拉挑不动，敲两三个字就缩到一两条。
+ */
+function NamePicker({ value, names, label, emptyPick, onPick }: NamePickerProps) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+  // 格子下面放不下候选列表时就改成往上展开。
+  const [up, setUp] = useState(false);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const text = draft === null ? value : draft;
+  const typed = text.trim();
+  // 打进去的字一个名字都对不上就标红；空着不算错，只是还没填。
+  const bad = typed !== '' && !names.includes(typed);
+  const hits = typed === '' ? names : names.filter((n) => n.includes(typed));
+  const shown = hits.slice(0, 6);
+
+  /** 只有按回车（与某个名字完全相同）或点候选才走到这里。 */
+  const commit = (name: string) => {
+    onPick(name);
+    setDraft(null);
+  };
+
+  return (
+    <div className="picker">
+      <input
+        ref={inputRef}
+        className={bad ? 'bad' : undefined}
+        value={text}
+        placeholder={label}
+        title={bad ? '没有这个' + label + '：按回车写回对得上的名字，或按 Esc 收回原来的名字' : label}
+        onFocus={() => {
+          const el = inputRef.current;
+          // 候选列表最高 190 像素，再加一点余量。
+          setUp(el !== null && window.innerHeight - el.getBoundingClientRect().bottom < 200);
+          setOpen(true);
+        }}
+        onBlur={() => setOpen(false)}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            if (typed === '' && emptyPick !== undefined) commit(emptyPick);
+            else if (names.includes(typed)) commit(typed);
+          } else if (e.key === 'Escape') {
+            setDraft(null);
+            setOpen(false);
+          }
+        }}
+      />
+      {open ? (
+        <div className={up ? 'picklist up' : 'picklist'}>
+          {shown.map((n) => (
+            <button
+              key={n}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                commit(n);
+                setOpen(false);
+              }}
+            >
+              {n}
+            </button>
+          ))}
+          {hits.length > shown.length ? (
+            <span className="more dim small">还有 {hits.length - shown.length} 个</span>
+          ) : null}
+          {shown.length === 0 ? <span className="more dim small">没有这个{label}</span> : null}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 interface SiteTableProps {
@@ -103,19 +185,30 @@ export function SiteTable({ world, onEdit, startSite, onPick }: SiteTableProps) 
               />
             </td>
             <td>
-              <select value={s.faction} onChange={(e) => onEdit(s.id, { faction: Number(e.target.value) })}>
-                {world.factions.map((f) => (
-                  <option key={f.id} value={f.id}>
-                    {f.name}
-                  </option>
-                ))}
-              </select>
+              <NamePicker
+                value={factionName(world, s.faction)}
+                names={world.factions.map((f) => f.name)}
+                label="势力"
+                onPick={(name) => {
+                  const f = world.factions.find((x) => x.name === name);
+                  if (f) onEdit(s.id, { faction: f.id });
+                }}
+              />
             </td>
             <td>
-              <input
-                placeholder="无"
-                value={s.parent === null ? '' : String(s.parent)}
-                onChange={(e) => onEdit(s.id, { parent: e.target.value.trim() === '' ? null : Number(e.target.value) })}
+              <NamePicker
+                value={s.parent === null ? NO_PARENT : siteName(world, s.parent)}
+                names={[NO_PARENT, ...world.sites.filter((x) => x.id !== s.id).map((x) => x.name)]}
+                label="上级"
+                emptyPick={NO_PARENT}
+                onPick={(name) => {
+                  if (name === NO_PARENT) {
+                    onEdit(s.id, { parent: null });
+                    return;
+                  }
+                  const p = world.sites.find((x) => x.name === name && x.id !== s.id);
+                  if (p) onEdit(s.id, { parent: p.id });
+                }}
               />
             </td>
             <td>
@@ -132,9 +225,13 @@ interface UnitTableProps {
   world: World;
   onEdit: (id: number, patch: Partial<Unit>) => void;
   onOrder: (id: number, queue: Order[]) => void;
+  /** 点「前往…」：进入在地图上挑目的地的状态。 */
+  onPickDestination: (id: number) => void;
+  /** 正在挑目的地的那支部队；没有就是 null。 */
+  pickingUnit: number | null;
 }
 
-export function UnitTable({ world, onEdit, onOrder }: UnitTableProps) {
+export function UnitTable({ world, onEdit, onOrder, onPickDestination, pickingUnit }: UnitTableProps) {
   if (world.units.length === 0) return <p className="dim">还没有部队。</p>;
 
   return (
@@ -158,13 +255,15 @@ export function UnitTable({ world, onEdit, onOrder }: UnitTableProps) {
               <input value={u.name} onChange={(e) => onEdit(u.id, { name: e.target.value })} />
             </td>
             <td>
-              <select value={u.faction} onChange={(e) => onEdit(u.id, { faction: Number(e.target.value) })}>
-                {world.factions.map((f) => (
-                  <option key={f.id} value={f.id}>
-                    {f.name}
-                  </option>
-                ))}
-              </select>
+              <NamePicker
+                value={factionName(world, u.faction)}
+                names={world.factions.map((f) => f.name)}
+                label="势力"
+                onPick={(name) => {
+                  const f = world.factions.find((x) => x.name === name);
+                  if (f) onEdit(u.id, { faction: f.id });
+                }}
+              />
             </td>
             <td>
               <input
@@ -199,16 +298,15 @@ export function UnitTable({ world, onEdit, onOrder }: UnitTableProps) {
               />
             </td>
             <td>
-              <select value={orderValue(u)} onChange={(e) => onOrder(u.id, orderFromValue(e.target.value))}>
-                <option value="">无</option>
-                <option value="hold">原地待命</option>
-                {world.sites.map((s) => (
-                  <option key={s.id} value={'march:' + String(s.id)}>
-                    前往 {s.name}
-                  </option>
-                ))}
-              </select>
-              {u.queue.length > 1 ? <div className="dim small">队列：{orderText(world, u)}</div> : null}
+              <div className="row">
+                <button onClick={() => onOrder(u.id, [{ kind: 'hold' }])}>待命</button>
+                <button onClick={() => onPickDestination(u.id)}>前往…</button>
+                <button onClick={() => onOrder(u.id, [])}>清空</button>
+              </div>
+              <div className="dim small">{orderText(world, u)}</div>
+              {pickingUnit === u.id ? (
+                <div className="dim small">在地图上点一个据点作目的地（Esc 或点空白处取消）</div>
+              ) : null}
             </td>
           </tr>
         ))}

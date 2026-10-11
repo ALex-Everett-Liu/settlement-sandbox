@@ -54,6 +54,8 @@ interface Scene {
   zoom: number;
   /** 正在挑的起点据点；没有就是 null。只影响据点圆点画成什么颜色。 */
   start: number | null;
+  /** 正在挑目的地的那支部队；没有就是 null。只影响部队记号画成什么颜色。 */
+  pickUnit: number | null;
 }
 
 /** 线宽按屏幕像素折算成世界单位，缩放多大看起来都一样粗。 */
@@ -202,8 +204,20 @@ function syncSites(scene: Scene, world: World): void {
 }
 
 /** 部队记号：在据点里贴在据点边上，在路上按进度插值。每推进一天都会调一次，很便宜。 */
+/** 部队记号的样子：外面套一圈就是「正在挑它作目的地」。两笔都是填充，宽度不随缩放变。 */
+function drawUnitMarker(scene: Scene, u: Unit): void {
+  const g = scene.unitGfx.get(u.id);
+  if (!g) return;
+  const r = 6;
+  g.clear();
+  if (u.id === scene.pickUnit) {
+    g.poly([0, -(r + 3.5), r + 3.5, 0, 0, r + 3.5, -(r + 3.5), 0], true).fill({ color: scene.palette.siteStart });
+  }
+  g.poly([0, -r, r, 0, 0, r, -r, 0], true).fill({ color: scene.palette.unit });
+}
+
 function syncUnits(scene: Scene, world: World): void {
-  const { units, unitGfx, unitGfxToUnit, palette } = scene;
+  const { units, unitGfx, unitGfxToUnit } = scene;
   const seen = new Set<number>();
 
   for (const u of world.units) {
@@ -211,14 +225,13 @@ function syncUnits(scene: Scene, world: World): void {
     let g = unitGfx.get(u.id);
     if (!g) {
       g = new Graphics();
-      g.poly([0, -6, 6, 0, 0, 6, -6, 0], true);
-      g.fill({ color: palette.unit });
       // 记号要能命中，浮层才知道指的是哪一支部队。容器是 passive 时，子对象照样可以设成 static。
       g.eventMode = 'static';
       g.cursor = 'pointer';
       units.addChild(g);
       unitGfx.set(u.id, g);
       unitGfxToUnit.set(g, u.id);
+      drawUnitMarker(scene, u);
     }
     const p = unitWorldPos(world, u);
     if (p) g.position.set(p.x, p.y);
@@ -279,12 +292,26 @@ export interface MapViewProps {
   theme: Theme;
   /** 正在挑的起点据点；没有就是 null。 */
   startSite: number | null;
+  /** 正在挑目的地的那支部队；没有就是 null。 */
+  pickUnit: number | null;
+  /** 正在挑什么，写在工具行里；没在挑就是 null。 */
+  pickHint: string | null;
   onAddSite: (x: number, y: number) => void;
   onPickSite: (id: number) => void;
   onCancelPick: () => void;
 }
 
-export function MapView({ world, params, theme, startSite, onAddSite, onPickSite, onCancelPick }: MapViewProps) {
+export function MapView({
+  world,
+  params,
+  theme,
+  startSite,
+  pickUnit,
+  pickHint,
+  onAddSite,
+  onPickSite,
+  onCancelPick,
+}: MapViewProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const sceneRef = useRef<Scene | null>(null);
   const hoverTimer = useRef<number | null>(null);
@@ -324,6 +351,7 @@ export function MapView({ world, params, theme, startSite, onAddSite, onPickSite
       palette: PALETTES[theme],
       zoom: 1,
       start: startSite,
+      pickUnit: pickUnit,
     };
     sceneRef.current = scene;
 
@@ -508,13 +536,20 @@ export function MapView({ world, params, theme, startSite, onAddSite, onPickSite
     scene.terrain.visible = showTerrain;
   }, [showTerrain]);
 
-  // 起点的圈只改据点圆点画成什么颜色：重画据点那一层就够，不动地形与连线。
+  // 挑起点或挑目的地都只改记号的颜色：据点那一层整体重画，部队记号只重画换了标记的那两个。
   useEffect(() => {
     const scene = sceneRef.current;
     if (!scene) return;
+    const before = scene.pickUnit;
     scene.start = startSite;
+    scene.pickUnit = pickUnit;
     syncSites(scene, worldRef.current);
-  }, [startSite]);
+    for (const id of [before, pickUnit]) {
+      if (id === null) continue;
+      const u = worldRef.current.units.find((x) => x.id === id);
+      if (u) drawUnitMarker(scene, u);
+    }
+  }, [startSite, pickUnit]);
 
   return (
     <div className="mapwrap">
@@ -524,11 +559,7 @@ export function MapView({ world, params, theme, startSite, onAddSite, onPickSite
           <input type="checkbox" checked={showTerrain} onChange={(e) => setShowTerrain(e.target.checked)} /> 生成的地形层
         </label>
         <span className="dim small">滚轮缩放 · 拖动平移 · 双击空白处新增据点 · 单击据点挑起点／终点 · 指到据点或部队看它的数</span>
-        {startSite !== null ? (
-          <span className="dim small">
-            起点：{world.sites.find((s) => s.id === startSite)?.name ?? String(startSite)} · 再点一个据点作终点，Esc 或点空白处取消
-          </span>
-        ) : null}
+        {pickHint !== null ? <span className="dim small">{pickHint}</span> : null}
         <span className="dim small">{cursor ? '坐标 ' + String(cursor.x) + ', ' + String(cursor.y) : '坐标 —'}</span>
       </div>
       {hover ? (

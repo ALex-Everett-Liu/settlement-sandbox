@@ -30,6 +30,8 @@ export function App() {
   const [note, setNote] = useState('正在打开世界库…');
   // 正在挑的起点据点：0 表示还没挑。挑法是在地图上点据点，见 MapView 的 onPickSite。
   const [linkFrom, setLinkFrom] = useState(0);
+  // 正在挑目的地的那支部队：0 表示没有。与起点共用地图上那一次点选。
+  const [orderTarget, setOrderTarget] = useState(0);
   const worldRef = useRef<World | null>(null);
 
   // The theme rides in the params table, so it is stored in this world's database.
@@ -235,11 +237,26 @@ export function App() {
     [commit],
   );
 
-  /** 在地图上点了一个据点：还没有起点就是挑起点，已经有起点就是建连接，点的是起点本身就取消。 */
+  /** 点「前往…」：等一次地图上的点选，选中哪个据点就是目的地。 */
+  const startOrderPick = useCallback((unitId: number) => {
+    setLinkFrom(0);
+    setOrderTarget(unitId);
+    setNote('挑目的地：在地图上点一个据点（Esc 或点空白处取消）');
+  }, []);
+
+  /** 在地图上点了一个据点：正挑目的地就派那支部队去，否则走建连接那一套。 */
   const pickSite = useCallback(
     (id: number) => {
       const w = worldRef.current;
       if (!w) return;
+      if (orderTarget !== 0) {
+        const u = w.units.find((x) => x.id === orderTarget);
+        editQueue(orderTarget, [{ kind: 'march', to: id }]);
+        setNote((u ? u.name : '部队 ' + String(orderTarget)) + ' 前往 ' + siteName(w, id));
+        if (api) void api.saveWorld(w);
+        setOrderTarget(0);
+        return;
+      }
       if (linkFrom === 0) {
         setLinkFrom(id);
         setNote('起点：' + siteName(w, id) + ' · 再点一个据点作终点（Esc 或点空白处取消）');
@@ -253,24 +270,29 @@ export function App() {
       addLinkBetween(linkFrom, id);
       setLinkFrom(0);
     },
-    [linkFrom, addLinkBetween],
+    [linkFrom, orderTarget, addLinkBetween, editQueue],
   );
 
   const cancelPick = useCallback(() => {
+    if (orderTarget !== 0) {
+      setOrderTarget(0);
+      setNote('挑目的地取消了');
+      return;
+    }
     if (linkFrom === 0) return;
     setLinkFrom(0);
     setNote('起点取消了');
-  }, [linkFrom]);
+  }, [linkFrom, orderTarget]);
 
-  // 挑起点的时候按 Esc 取消。
+  // 挑起点或挑目的地的时候按 Esc 取消。
   useEffect(() => {
-    if (linkFrom === 0) return;
+    if (linkFrom === 0 && orderTarget === 0) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') cancelPick();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [linkFrom, cancelPick]);
+  }, [linkFrom, orderTarget, cancelPick]);
 
   const calendar = world
     ? '第 ' + year(world, params) + ' 年 ' + month(world, params) + ' 月 ' + dayOfMonth(world, params) + ' 日'
@@ -338,7 +360,13 @@ export function App() {
             onPick={pickSite}
           />
         ) : view === 'units' ? (
-          <UnitTable world={world} onEdit={editUnit} onOrder={editQueue} />
+          <UnitTable
+            world={world}
+            onEdit={editUnit}
+            onOrder={editQueue}
+            onPickDestination={startOrderPick}
+            pickingUnit={orderTarget === 0 ? null : orderTarget}
+          />
         ) : view === 'links' ? (
           <LinkTable world={world} onEdit={editLink} />
         ) : (
@@ -347,6 +375,14 @@ export function App() {
             params={params}
             theme={theme}
             startSite={linkFrom === 0 ? null : linkFrom}
+            pickUnit={orderTarget === 0 ? null : orderTarget}
+            pickHint={
+              orderTarget !== 0
+                ? '挑目的地：在地图上点一个据点，Esc 或点空白处取消'
+                : linkFrom !== 0
+                  ? '起点：' + siteName(world, linkFrom) + ' · 再点一个据点作终点，Esc 或点空白处取消'
+                  : null
+            }
             onAddSite={addSiteAt}
             onPickSite={pickSite}
             onCancelPick={cancelPick}

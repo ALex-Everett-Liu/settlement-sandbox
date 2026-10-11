@@ -1,7 +1,7 @@
 // Renderer-side formatting: engine enums and positions become Chinese labels.
 // Nothing here mutates the world.
 import { TERRAIN_LABEL, TERRAINS } from '../engine/labels.ts';
-import type { Order, Place, Unit, World } from '../engine/types.ts';
+import type { Place, Unit, World } from '../engine/types.ts';
 
 // 地貌的名字与顺序由引擎那边给，界面不再各写一份。
 export { TERRAIN_LABEL, TERRAINS };
@@ -28,23 +28,9 @@ export function placeText(world: World, place: Place): string {
   return ends + (place.kind === 'march' ? ' 行军 ' : ' 扎营 ') + percent(place.t);
 }
 
-/** The whole queue as one line; the table adds it when the queue holds more than one order. */
+/** The whole queue as one line; the table shows it under the three command buttons. */
 export function orderText(world: World, unit: Unit): string {
   if (unit.queue.length === 0) return '—';
-  const parts = unit.queue.map((o: Order) => (o.kind === 'hold' ? '原地待命' : '前往 ' + siteName(world, o.to)));
+  const parts = unit.queue.map((o) => (o.kind === 'hold' ? '原地待命' : '前往 ' + siteName(world, o.to)));
   return parts.join('、');
-}
-
-/** The command column edits the queue's first order; a select needs a string value. */
-export function orderValue(unit: Unit): string {
-  const first = unit.queue[0];
-  if (!first) return '';
-  return first.kind === 'hold' ? 'hold' : 'march:' + String(first.to);
-}
-
-/** Turn a select value back into a queue. Choosing one replaces the whole queue. */
-export function orderFromValue(value: string): Order[] {
-  if (value === '') return [];
-  if (value === 'hold') return [{ kind: 'hold' }];
-  return [{ kind: 'march', to: Number(value.slice('march:'.length)) }];
 }
