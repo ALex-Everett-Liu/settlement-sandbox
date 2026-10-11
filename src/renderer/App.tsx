@@ -3,19 +3,21 @@ import { answerAsk } from '../engine/ask.ts';
 import { DEFAULT_PARAMS } from '../engine/params.ts';
 import { dayOfMonth, month, tickDay, year } from '../engine/tick.ts';
 import type { Link, Order, Params, Site, Theme, Unit, World } from '../engine/types.ts';
-import { demoWorld } from '../engine/world.ts';
+import { addLink, addSite, demoWorld } from '../engine/world.ts';
 import type { SandboxApi } from '../shared/ipc.ts';
+import { MapView } from './map.tsx';
 import { LinkTable, SiteTable, UnitTable } from './tables.tsx';
 
 const api = (window as unknown as { sandbox?: SandboxApi }).sandbox;
 const SPEEDS = [1, 2, 4, 8, 16];
 
-type View = 'sites' | 'units' | 'links';
+type View = 'sites' | 'units' | 'links' | 'map';
 
 const VIEWS: { id: View; label: string }[] = [
   { id: 'sites', label: '据点' },
   { id: 'units', label: '部队' },
   { id: 'links', label: '连接' },
+  { id: 'map', label: '地图' },
 ];
 
 export function App() {
@@ -26,6 +28,8 @@ export function App() {
   const [view, setView] = useState<View>('sites');
   const [dbPath, setDbPath] = useState('（还不知道）');
   const [note, setNote] = useState('正在打开世界库…');
+  const [linkFrom, setLinkFrom] = useState(0);
+  const [linkTo, setLinkTo] = useState(0);
   const worldRef = useRef<World | null>(null);
 
   // The theme rides in the params table, so it is stored in this world's database.
@@ -193,6 +197,44 @@ export function App() {
     [commit],
   );
 
+  /** 地图上双击：在双击的位置新增一个据点，名字先给个编号，其余用最小默认值。 */
+  const addSiteAt = useCallback(
+    (x: number, y: number) => {
+      const w = worldRef.current;
+      if (!w) return;
+      const s = addSite(w, {
+        name: '新据点 ' + String(w.sites.length + 1),
+        x, y, scale: 1, population: 0, morale: 70, stability: 60,
+        money: 0, food: 0, parent: null, faction: w.factions[0]?.id ?? 1,
+      });
+      commit(w);
+      setNote('新增据点：' + s.name + '（' + String(x) + '，' + String(y) + '）');
+      if (api) void api.saveWorld(w);
+    },
+    [commit],
+  );
+
+  /** 新增连接：两端各挑一个据点，地貌先留空，引擎走到它上面时会停下来问。 */
+  const addLinkBetween = useCallback(() => {
+    const w = worldRef.current;
+    if (!w) return;
+    if (linkFrom === 0 || linkTo === 0 || linkFrom === linkTo) {
+      setNote('新增连接要先挑两个不同的据点');
+      return;
+    }
+    const exists = w.links.some(
+      (l) => (l.a === linkFrom && l.b === linkTo) || (l.a === linkTo && l.b === linkFrom),
+    );
+    if (exists) {
+      setNote('这两座据点之间已经有连接了');
+      return;
+    }
+    const l = addLink(w, linkFrom, linkTo, 1, null);
+    commit(w);
+    setNote('新增连接 ' + String(l.id) + '：地貌未填，绕行系数 1.0');
+    if (api) void api.saveWorld(w);
+  }, [commit, linkFrom, linkTo]);
+
   const calendar = world
     ? '第 ' + year(world, params) + ' 年 ' + month(world, params) + ' 月 ' + dayOfMonth(world, params) + ' 日'
     : '—';
@@ -200,6 +242,7 @@ export function App() {
     sites: world ? world.sites.length : 0,
     units: world ? world.units.length : 0,
     links: world ? world.links.length : 0,
+    map: world ? world.sites.length : 0,
   };
   const logTail = world ? world.log.slice(-14).reverse() : [];
 
@@ -238,6 +281,27 @@ export function App() {
               <span className="dim"> {counts[v.id]}</span>
             </button>
           ))}
+          <span className="dim small push">新增连接</span>
+          <select value={linkFrom} onChange={(e) => setLinkFrom(Number(e.target.value))}>
+            <option value={0}>从…</option>
+            {(world?.sites ?? []).map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+          <select value={linkTo} onChange={(e) => setLinkTo(Number(e.target.value))}>
+            <option value={0}>到…</option>
+            {(world?.sites ?? []).map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+          <button onClick={addLinkBetween}>建立</button>
+          <button onClick={() => addSiteAt(Math.round(params.mapWidth / 2), Math.round(params.mapHeight / 2))}>
+            新增据点
+          </button>
         </div>
         <div className="dim small">世界库：{dbPath}</div>
         <div className="dim small">{note}</div>
@@ -250,8 +314,10 @@ export function App() {
           <SiteTable world={world} onEdit={editSite} />
         ) : view === 'units' ? (
           <UnitTable world={world} onEdit={editUnit} onOrder={editQueue} />
-        ) : (
+        ) : view === 'links' ? (
           <LinkTable world={world} onEdit={editLink} />
+        ) : (
+          <MapView world={world} params={params} theme={theme} onAddSite={addSiteAt} />
         )}
 
         <section className="log">

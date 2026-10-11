@@ -202,3 +202,36 @@ td.ro {
 .log li {
   white-space: pre-wrap;
 }
+
+/* 地图页签：画布占满，下面一条工具行。 */
+.mapwrap {
+  position: relative;
+}
+
+.map {
+  height: calc(100vh - 215px);
+  min-height: 320px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.mapbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: center;
+  padding-top: 6px;
+}
+
+.maphover {
+  position: absolute;
+  z-index: 5;
+  padding: 6px 10px;
+  background: var(--field);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.16);
+  pointer-events: none;
+  white-space: nowrap;
+}
