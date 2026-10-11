@@ -77,6 +77,11 @@ header {
   font-size: 12px;
 }
 
+/* 切走的页签：留在地里但不显示，地图因此不会在切页签时被拆掉。 */
+.hidden {
+  display: none;
+}
+
 /* 引擎停下来问的那个框：居中模态，答完才动别处。 */
 .askbackdrop {
   position: fixed;

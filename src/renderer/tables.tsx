@@ -252,9 +252,11 @@ interface UnitTableProps {
   onPickDestination: (id: number) => void;
   /** 正在挑目的地的那支部队；没有就是 null。 */
   pickingUnit: number | null;
+  /** 点「定位」：地图页签把这一支部队移到画面中央。 */
+  onLocate: (id: number) => void;
 }
 
-export function UnitTable({ world, onEdit, onOrder, onPickDestination, pickingUnit }: UnitTableProps) {
+export function UnitTable({ world, onEdit, onOrder, onPickDestination, pickingUnit, onLocate }: UnitTableProps) {
   if (world.units.length === 0) return <p className="dim">还没有部队。</p>;
 
   return (
@@ -269,6 +271,7 @@ export function UnitTable({ world, onEdit, onOrder, onPickDestination, pickingUn
           <th>位置</th>
           <th>随身粮草</th>
           <th>命令</th>
+          <th>地图</th>
         </tr>
       </thead>
       <tbody>
@@ -330,6 +333,9 @@ export function UnitTable({ world, onEdit, onOrder, onPickDestination, pickingUn
               {pickingUnit === u.id ? (
                 <div className="dim small">在地图上点一个据点作目的地（Esc 或点空白处取消）</div>
               ) : null}
+            </td>
+            <td>
+              <button onClick={() => onLocate(u.id)}>定位</button>
             </td>
           </tr>
         ))}

@@ -34,8 +34,8 @@ export function App() {
   const [linkFrom, setLinkFrom] = useState(0);
   // 正在挑目的地的那支部队：0 表示没有。与起点共用地图上那一次点选。
   const [orderTarget, setOrderTarget] = useState(0);
-  // 「定位」请求：n 是次数，同一座据点按两次也要重新定位一次。
-  const [focusSite, setFocusSite] = useState<{ id: number; n: number } | null>(null);
+  // 「定位」请求：n 是次数，同一个目标按两次也要重新定位一次。
+  const [focus, setFocus] = useState<{ kind: 'site' | 'unit'; id: number; n: number } | null>(null);
   const worldRef = useRef<World | null>(null);
 
   // The theme rides in the params table, so it is stored in this world's database.
@@ -255,7 +255,13 @@ export function App() {
 
   /** 据点表里按「定位」：切到地图页签，把那一座移到画面中央。 */
   const locateSite = useCallback((id: number) => {
-    setFocusSite((cur) => ({ id, n: (cur?.n ?? 0) + 1 }));
+    setFocus((cur) => ({ kind: 'site', id, n: (cur?.n ?? 0) + 1 }));
+    setView('map');
+  }, []);
+
+  /** 部队表里按「定位」：同一套；中心取那支部队当前的位置（行军中取连接上的插值点）。 */
+  const locateUnit = useCallback((id: number) => {
+    setFocus((cur) => ({ kind: 'unit', id, n: (cur?.n ?? 0) + 1 }));
     setView('map');
   }, []);
 
@@ -372,45 +378,53 @@ export function App() {
       <main>
         {!world ? (
           <p className="dim">世界还没读进来。</p>
-        ) : view === 'sites' ? (
-          <SiteTable
-            world={world}
-            onEdit={editSite}
-            startSite={linkFrom === 0 ? null : linkFrom}
-            onPick={pickSite}
-            onLocate={locateSite}
-          />
-        ) : view === 'units' ? (
-          <UnitTable
-            world={world}
-            onEdit={editUnit}
-            onOrder={editQueue}
-            onPickDestination={startOrderPick}
-            pickingUnit={orderTarget === 0 ? null : orderTarget}
-          />
-        ) : view === 'links' ? (
-          <LinkTable world={world} onEdit={editLink} />
-        ) : view === 'settings' ? (
-          <SettingsView world={world} params={params} theme={theme} onChange={writeParams} />
         ) : (
-          <MapView
-            world={world}
-            params={params}
-            theme={theme}
-            startSite={linkFrom === 0 ? null : linkFrom}
-            pickUnit={orderTarget === 0 ? null : orderTarget}
-            focusSite={focusSite}
-            pickHint={
-              orderTarget !== 0
-                ? '挑目的地：在地图上点一个据点，Esc 或点空白处取消'
-                : linkFrom !== 0
-                  ? '起点：' + siteName(world, linkFrom) + ' · 再点一个据点作终点，Esc 或点空白处取消'
-                  : null
-            }
-            onAddSite={addSiteAt}
-            onPickSite={pickSite}
-            onCancelPick={cancelPick}
-          />
+          <>
+            {/* 地图常驻：切页签只是把它藏起来，场景与视图（倍数、位置）都留着。 */}
+            <div className={view === 'map' ? undefined : 'hidden'}>
+              <MapView
+                world={world}
+                params={params}
+                theme={theme}
+                visible={view === 'map'}
+                startSite={linkFrom === 0 ? null : linkFrom}
+                pickUnit={orderTarget === 0 ? null : orderTarget}
+                focus={focus}
+                pickHint={
+                  orderTarget !== 0
+                    ? '挑目的地：在地图上点一个据点，Esc 或点空白处取消'
+                    : linkFrom !== 0
+                      ? '起点：' + siteName(world, linkFrom) + ' · 再点一个据点作终点，Esc 或点空白处取消'
+                      : null
+                }
+                onAddSite={addSiteAt}
+                onPickSite={pickSite}
+                onCancelPick={cancelPick}
+              />
+            </div>
+            {view === 'sites' ? (
+              <SiteTable
+                world={world}
+                onEdit={editSite}
+                startSite={linkFrom === 0 ? null : linkFrom}
+                onPick={pickSite}
+                onLocate={locateSite}
+              />
+            ) : view === 'units' ? (
+              <UnitTable
+                world={world}
+                onEdit={editUnit}
+                onOrder={editQueue}
+                onPickDestination={startOrderPick}
+                pickingUnit={orderTarget === 0 ? null : orderTarget}
+                onLocate={locateUnit}
+              />
+            ) : view === 'links' ? (
+              <LinkTable world={world} onEdit={editLink} />
+            ) : view === 'settings' ? (
+              <SettingsView world={world} params={params} theme={theme} onChange={writeParams} />
+            ) : null}
+          </>
         )}
 
         <section className="log">

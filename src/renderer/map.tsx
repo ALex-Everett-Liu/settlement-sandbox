@@ -66,6 +66,8 @@ interface Scene {
   start: number | null;
   /** 正在挑目的地的那支部队；没有就是 null。只影响部队记号画成什么颜色。 */
   pickUnit: number | null;
+  /** 有没有按画布尺寸摆过一次。地图一开就藏着时画布是 0 尺寸，摆不了。 */
+  fitted: boolean;
 }
 
 /** 线宽按屏幕像素折算成世界单位，缩放多大看起来都一样粗。 */
@@ -106,9 +108,10 @@ function scaleUnits(zoom: number): number {
   return pow * 10;
 }
 
-/** 把整张地图摆进画布：一进来的时候、以及按「缩到全图」都走这里。 */
+/** 把整张地图摆进画布：一进来的时候、以及按「缩到全图」都走这里。画布还没有尺寸就先不摆。 */
 function fitView(scene: Scene, params: Params): void {
   const { width, height } = scene.app.screen;
+  if (width < 50 || height < 50) return;
   const margin = 20;
   scene.zoom = Math.min(
     (width - margin * 2) / params.mapWidth,
@@ -116,6 +119,7 @@ function fitView(scene: Scene, params: Params): void {
   );
   scene.root.scale.set(scene.zoom, -scene.zoom);
   scene.root.position.set(margin, height - margin);
+  scene.fitted = true;
 }
 
 /** 边界：地图至少留 60 像素在画面里，别拖成一片空白。 */
@@ -374,8 +378,10 @@ export interface MapViewProps {
   pickUnit: number | null;
   /** 正在挑什么，写在工具行里；没在挑就是 null。 */
   pickHint: string | null;
-  /** 「定位」请求：n 是次数，同一座据点按两次也要重新定位一次。 */
-  focusSite: { id: number; n: number } | null;
+  /** 这一个页签是不是当前显示的那一个：藏起来的时候跳过节拍里的记号同步。 */
+  visible: boolean;
+  /** 「定位」请求：n 是次数，同一个目标按两次也要重新定位一次。 */
+  focus: { kind: 'site' | 'unit'; id: number; n: number } | null;
   onAddSite: (x: number, y: number) => void;
   onPickSite: (id: number) => void;
   onCancelPick: () => void;
@@ -394,10 +400,11 @@ export function MapView({
   world,
   params,
   theme,
+  visible,
   startSite,
   pickUnit,
   pickHint,
-  focusSite,
+  focus,
   onAddSite,
   onPickSite,
   onCancelPick,
@@ -410,10 +417,13 @@ export function MapView({
   const cancelRef = useRef(onCancelPick);
   const worldRef = useRef(world);
   const paramsRef = useRef(params);
+  const visibleRef = useRef(visible);
+  const focusRef = useRef(focus);
   const actionsRef = useRef<{
     zoomBy: (factor: number) => void;
     fit: () => void;
-    focusOn: (id: number) => void;
+    refresh: () => void;
+    focusOn: (kind: 'site' | 'unit', id: number) => void;
   } | null>(null);
   const [showTerrain, setShowTerrain] = useState(true);
   const [view, setView] = useState<ViewInfo>({ zoom: 1, x0: 0, x1: 0, y0: 0, y1: 0 });
@@ -425,6 +435,8 @@ export function MapView({
   cancelRef.current = onCancelPick;
   worldRef.current = world;
   paramsRef.current = params;
+  visibleRef.current = visible;
+  focusRef.current = focus;
 
   // 建场景。依赖为空：只建一次。
   useEffect(() => {
@@ -450,6 +462,7 @@ export function MapView({
       zoom: 1,
       start: startSite,
       pickUnit: pickUnit,
+      fitted: false,
     };
     sceneRef.current = scene;
 
@@ -509,7 +522,7 @@ export function MapView({
           syncView();
         };
 
-        // 工具行上那三个按钮与据点表的「定位」都走这里。
+        // 工具行上那三个按钮、据点表与部队表的「定位」都走这里。
         actionsRef.current = {
           zoomBy: (factor: number) => {
             const { width, height } = scene.app.screen;
@@ -520,19 +533,37 @@ export function MapView({
             redraw(scene, worldRef.current, paramsRef.current);
             syncView();
           },
-          focusOn: (id: number) => {
-            const s = worldRef.current.sites.find((x) => x.id === id);
-            if (!s) return;
+          refresh: () => {
+            // 藏起来的时候宿主是 0 尺寸，PixiJS 自己不会发现它又有了大小，这里补量一次。
+            const host = hostRef.current;
+            if (host && host.clientWidth > 0 && host.clientHeight > 0) {
+              scene.app.renderer.resize(host.clientWidth, host.clientHeight);
+            }
+            // 一开就藏在别的页签后面时，画布还没有尺寸，那时摆不了；这里补一次。
+            if (!scene.fitted) fitView(scene, paramsRef.current);
+            syncSites(scene, worldRef.current);
+            syncUnits(scene, worldRef.current);
+            redraw(scene, worldRef.current, paramsRef.current);
+            syncView();
+          },
+          focusOn: (kind: 'site' | 'unit', id: number) => {
+            const w = worldRef.current;
+            const site = kind === 'site' ? w.sites.find((x) => x.id === id) : undefined;
+            const unit = kind === 'unit' ? w.units.find((x) => x.id === id) : undefined;
+            const at = site ? { x: site.x, y: site.y } : unit ? unitWorldPos(w, unit) : null;
+            if (!at) return;
             const { width, height } = scene.app.screen;
             const z = Math.max(scene.zoom, 0.4);
             scene.zoom = z;
             scene.root.scale.set(z, -z);
-            scene.root.position.set(width / 2 - s.x * z, height / 2 + s.y * z);
+            scene.root.position.set(width / 2 - at.x * z, height / 2 + at.y * z);
             clampPosition(scene, paramsRef.current);
             redraw(scene, worldRef.current, paramsRef.current);
             syncView();
           },
         };
+        // 请求可能比场景先到（挂载的那一瞬间），补跑一次。
+        if (focusRef.current !== null) actionsRef.current.focusOn(focusRef.current.kind, focusRef.current.id);
         syncView();
 
         let dragging = false;
@@ -636,6 +667,9 @@ export function MapView({
           });
         });
         scene.units.on('pointerout', dropHover);
+      })
+      .catch((err: unknown) => {
+        console.error('[map] 场景没建起来', err);
       });
 
     return () => {
@@ -667,17 +701,24 @@ export function MapView({
   }, [siteKey, linkKey]);
 
   // 世界每变一次（推进一天、改一个数）都走这里：只更新部队记号的位置。
+  // 地图藏在别的页签后面时跳过：几千支部队时这一步不便宜，切回来时 refresh 会补一次。
   useEffect(() => {
     const scene = sceneRef.current;
-    if (!scene) return;
+    if (!scene || !visibleRef.current) return;
     syncUnits(scene, world);
   }, [world]);
 
-  // 据点表里按「定位」：把那一座移到画面中央。n 变了就重来一次，同一座按两次也生效。
+  // 按「定位」：把那个目标移到画面中央。n 变了就重来一次，同一个目标按两次也生效。
   useEffect(() => {
-    if (focusSite === null) return;
-    actionsRef.current?.focusOn(focusSite.id);
-  }, [focusSite]);
+    if (focus === null) return;
+    actionsRef.current?.focusOn(focus.kind, focus.id);
+  }, [focus]);
+
+  // 从别的页签切回来：画布在隐藏期间量不到尺寸，回来时重新量一次并补跑一遍同步。
+  useEffect(() => {
+    if (!visible) return;
+    actionsRef.current?.refresh();
+  }, [visible]);
 
   useEffect(() => {
     const scene = sceneRef.current;
