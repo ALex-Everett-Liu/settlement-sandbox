@@ -2,6 +2,7 @@
 // Anything the designer may edit is an input; derived values (position, order
 // queue) stay read-only text.
 import type { Link, Order, Site, Terrain, Unit, World } from '../engine/types.ts';
+import { linkLength } from '../engine/world.ts';
 import {
   factionName,
   orderFromValue,
@@ -221,7 +222,8 @@ export function LinkTable({ world, onEdit }: LinkTableProps) {
       <thead>
         <tr>
           <th>两端</th>
-          <th>距离</th>
+          <th>长度</th>
+          <th>绕行系数</th>
           <th>地貌</th>
         </tr>
       </thead>
@@ -233,11 +235,13 @@ export function LinkTable({ world, onEdit }: LinkTableProps) {
               {' — '}
               {world.sites.find((s) => s.id === l.b)?.name ?? String(l.b)}
             </td>
+            <td className="ro">{Math.round(linkLength(world, l))}</td>
             <td>
               <input
                 type="number"
-                value={l.distance}
-                onChange={(e) => onEdit(l.id, { distance: toNumber(e.target.value, l.distance) })}
+                step="0.05"
+                value={l.detour}
+                onChange={(e) => onEdit(l.id, { detour: toNumber(e.target.value, l.detour) })}
               />
             </td>
             <td>

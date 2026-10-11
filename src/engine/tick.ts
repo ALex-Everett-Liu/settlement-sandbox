@@ -1,7 +1,7 @@
 import type { Params, Unit, World } from './types.ts';
 import { askFoodPolicy, askLinkTerrain } from './ask.ts';
 import { FOOD_POLICY_LABEL } from './labels.ts';
-import { linkBetween, linkById, otherEnd, siteName } from './world.ts';
+import { linkBetween, linkById, linkLength, otherEnd, siteName } from './world.ts';
 
 export function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
@@ -82,6 +82,15 @@ function startQueuedMoves(world: World, p: Params): void {
       );
       return;
     }
+    // 两端坐标重合时长度为 0，这条路走不了。这不是缺数据，是数据互相冲突，
+    // 弹框也给不出有意义的选项，所以照「没有连接」那条办：作废并记一行。
+    if (!(linkLength(world, link) > 0)) {
+      world.log.push(
+        `第 ${world.day} 天：${u.name} 要去 ${siteName(world, order.to)}，但两端坐标重合、长度为 0，命令作废。`,
+      );
+      u.queue.shift();
+      continue;
+    }
     u.queue.shift();
     u.place = { kind: 'march', link: link.id, from, to: order.to, t: 0 };
     world.log.push(`第 ${world.day} 天：${u.name} 从 ${siteName(world, from)} 出发，前往 ${siteName(world, order.to)}。`);
@@ -102,7 +111,10 @@ function advanceMarch(world: World, u: Unit, p: Params): void {
   }
 
   const terrainFactor = p.terrainSpeed[link.terrain];
-  const days = marchDays(u, link.distance, terrainFactor, p);
+  const length = linkLength(world, link);
+  // 长度为 0（两端坐标被改成重合）：停在原地，不报错也不刷日志；连接表里那一格显示 0。
+  if (!(length > 0)) return;
+  const days = marchDays(u, length, terrainFactor, p);
   if (!Number.isFinite(days) || days <= 0) return;
 
   pl.t += 1 / days;

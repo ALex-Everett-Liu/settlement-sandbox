@@ -45,7 +45,7 @@ export interface Faction {
 export interface Site {
   id: Id;
   name: string;
-  /** 坐标只用来画地图；行军按连接距离算。 */
+  /** 坐标：原点在左下角，x 向右、y 向上，范围是 0..mapWidth × 0..mapHeight。只用来画地图与算连接长度。 */
   x: number;
   y: number;
   /** 规模 1–5，与人口各自独立填。 */
@@ -83,7 +83,8 @@ export interface Link {
   id: Id;
   a: Id;
   b: Id;
-  distance: number;
+  /** 绕行系数。长度 = 两端直线距离 × 它，默认 1.0；山路绕远就调大。 */
+  detour: number;
   /** null 表示这条连接还没填地貌。引擎不许自己挑一档，会停下来问。 */
   terrain: Terrain | null;
 }
@@ -126,6 +127,10 @@ export interface Params {
   /** 行军速度基准（地图单位／天），再乘地貌系数与部队系数。 */
   speedBase: number;
   terrainSpeed: Record<Terrain, number>;
+
+  /** 地图的框：原点在左下角，x 向右、y 向上。 */
+  mapWidth: number;
+  mapHeight: number;
 
   /** UI theme. The engine never reads it; only the shell does. */
   theme: Theme;

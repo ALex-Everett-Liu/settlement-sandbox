@@ -106,7 +106,7 @@ console.log('\n== 参数表与版本 ==');
 saveParams(db, p);
 check('参数往返一致', canon(loadParams(db)) === canon(p));
 const ver = db.prepare('SELECT v FROM meta WHERE k = ?').get('schema_version') as { v: string };
-check('schema 版本记下来了', Number(ver.v) === 2, ver.v);
+check('schema 版本记下来了', Number(ver.v) === 3, ver.v);
 
 console.log('\n== 旧库缺字段 ==');
 // 造一份加 theme 之前写下的 params：把它按旧格式塞回 meta 表。
@@ -138,9 +138,17 @@ old.close();
 
 const up = openWorldDb(legacyPath);
 const ver2 = up.prepare('SELECT v FROM meta WHERE k = ?').get('schema_version') as { v: string };
-check('版本升到 2', Number(ver2.v) === 2, ver2.v);
-const keptTerrain = up.prepare('SELECT terrain FROM links WHERE id = 1').get() as { terrain: string | null };
-check('升级时旧数据带过来了', keptTerrain.terrain === 'plain', String(keptTerrain.terrain));
+check('版本升到 3', Number(ver2.v) === 3, ver2.v);
+const kept = up.prepare('SELECT detour, terrain FROM links WHERE id = 1').get() as {
+  detour: number;
+  terrain: string | null;
+};
+check('升级时地貌带过来了', kept.terrain === 'plain', String(kept.terrain));
+check('长度换成系数，按 1.0 起', Number(kept.detour) === 1, String(kept.detour));
+const linkCols = (up.prepare("SELECT name FROM pragma_table_info('links')").all() as Array<{ name: string }>).map(
+  (r) => r.name,
+);
+check('老的长度列没了', !linkCols.includes('distance'), linkCols.join('、'));
 up.prepare('UPDATE links SET terrain = NULL WHERE id = 1').run();
 const nulled = up.prepare('SELECT terrain FROM links WHERE id = 1').get() as { terrain: string | null };
 check('升级后地貌可以为空', nulled.terrain === null);

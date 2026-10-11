@@ -4,7 +4,7 @@ import { answerAsk } from '../src/engine/ask.ts';
 import { DEFAULT_PARAMS } from '../src/engine/params.ts';
 import { mulberry32 } from '../src/engine/rng.ts';
 import { dayOfMonth, isMonthEnd, marchDays, month, tickDay, year } from '../src/engine/tick.ts';
-import { demoWorld, worldFromJson, worldToJson } from '../src/engine/world.ts';
+import { demoWorld, linkLength, worldFromJson, worldToJson } from '../src/engine/world.ts';
 
 let bad = 0;
 function check(label: string, ok: boolean, extra = ''): void {
@@ -43,7 +43,9 @@ console.log('\n== 行军 ==');
 const w3 = demoWorld();
 const u3 = w3.units[0]!;
 const bId = w3.sites[1]!.id;
-const days = marchDays(u3, wL.distance, 1, p);
+const length = linkLength(w3, wL);
+check('长度 = 两端直线距离 × 绕行系数', Math.round(length) === 2062, Math.round(length) + ' 地图单位');
+const days = marchDays(u3, length, 1, p);
 check('行军天数是有限正数', Number.isFinite(days) && days > 1, days.toFixed(2) + ' 天');
 
 let departed = -1;

@@ -18,7 +18,7 @@ import type {
 } from '../engine/types.ts';
 import { emptyWorld } from '../engine/world.ts';
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS sites (
 );
 CREATE TABLE IF NOT EXISTS links (
   id INTEGER PRIMARY KEY, a INTEGER NOT NULL, b INTEGER NOT NULL,
-  distance REAL NOT NULL, terrain TEXT
+  detour REAL NOT NULL, terrain TEXT
 );
 CREATE TABLE IF NOT EXISTS units (
   id INTEGER PRIMARY KEY, faction INTEGER NOT NULL, name TEXT NOT NULL,
@@ -64,8 +64,9 @@ export function openWorldDb(path: string): DatabaseSync {
 }
 
 /**
- * 旧库升级。目前只有一条路：v1 → v2。
- * v2 的两处：links.terrain 允许空（缺地貌要存得下），units 加 food_policy 列。
+ * 旧库升级。按版本逐段落，缺哪一段就补哪一段。
+ * v2：links.terrain 允许空（缺地貌要存得下），units 加 food_policy 列。
+ * v3：连接不再直接存长度，改成存绕行系数 detour；长度由两端坐标算。
  * 整段在一个事务里跑；升级之前先留一份完整副本。
  */
 function migrate(db: DatabaseSync, dbPath: string, from: number): void {
@@ -73,16 +74,26 @@ function migrate(db: DatabaseSync, dbPath: string, from: number): void {
   const steps: string[] = [];
   db.exec('BEGIN');
   try {
-    if (!hasColumn(db, 'units', 'food_policy')) {
-      db.exec('ALTER TABLE units ADD COLUMN food_policy TEXT');
-      steps.push('units 加 food_policy');
+    if (from < 2) {
+      if (!hasColumn(db, 'units', 'food_policy')) {
+        db.exec('ALTER TABLE units ADD COLUMN food_policy TEXT');
+        steps.push('units 加 food_policy');
+      }
+      // SQLite 改不了现成列的 NOT NULL，只能把那张表按新定义重建一次。
+      db.exec('CREATE TABLE links_v2 (id INTEGER PRIMARY KEY, a INTEGER NOT NULL, b INTEGER NOT NULL, distance REAL NOT NULL, terrain TEXT)');
+      db.exec('INSERT INTO links_v2 (id, a, b, distance, terrain) SELECT id, a, b, distance, terrain FROM links');
+      db.exec('DROP TABLE links');
+      db.exec('ALTER TABLE links_v2 RENAME TO links');
+      steps.push('links.terrain 改为可空');
     }
-    // SQLite 改不了现成列的 NOT NULL，只能把那张表按新定义重建一次。
-    db.exec('CREATE TABLE links_v2 (id INTEGER PRIMARY KEY, a INTEGER NOT NULL, b INTEGER NOT NULL, distance REAL NOT NULL, terrain TEXT)');
-    db.exec('INSERT INTO links_v2 (id, a, b, distance, terrain) SELECT id, a, b, distance, terrain FROM links');
-    db.exec('DROP TABLE links');
-    db.exec('ALTER TABLE links_v2 RENAME TO links');
-    steps.push('links.terrain 改为可空');
+    if (from < 3) {
+      // 老的那个长度值与坐标无关，没法换算，一律按系数 1.0 起，长度改由坐标算。
+      db.exec('CREATE TABLE links_v3 (id INTEGER PRIMARY KEY, a INTEGER NOT NULL, b INTEGER NOT NULL, detour REAL NOT NULL, terrain TEXT)');
+      db.exec('INSERT INTO links_v3 (id, a, b, detour, terrain) SELECT id, a, b, 1.0, terrain FROM links');
+      db.exec('DROP TABLE links');
+      db.exec('ALTER TABLE links_v3 RENAME TO links');
+      steps.push('links.distance 换成 detour，一律 1.0');
+    }
     metaSet(db, 'schema_version', String(SCHEMA_VERSION));
     db.exec('COMMIT');
   } catch (e) {
@@ -173,8 +184,8 @@ export function saveWorld(db: DatabaseSync, world: World): void {
       insSite.run(s.id, s.name, s.x, s.y, s.scale, s.population, s.morale, s.stability, s.money, s.food, s.parent, s.faction);
     }
 
-    const insLink = db.prepare('INSERT INTO links (id, a, b, distance, terrain) VALUES (?, ?, ?, ?, ?)');
-    for (const l of world.links) insLink.run(l.id, l.a, l.b, l.distance, l.terrain);
+    const insLink = db.prepare('INSERT INTO links (id, a, b, detour, terrain) VALUES (?, ?, ?, ?, ?)');
+    for (const l of world.links) insLink.run(l.id, l.a, l.b, l.detour, l.terrain);
 
     const insUnit = db.prepare(
       'INSERT INTO units (id, faction, name, troops, training, organization, place_kind, place_site,' +
@@ -234,7 +245,7 @@ export function loadWorld(db: DatabaseSync): World {
   for (const r of db.prepare('SELECT * FROM links ORDER BY id').all() as Array<Record<string, unknown>>) {
     w.links.push({
       id: Number(r['id']), a: Number(r['a']), b: Number(r['b']),
-      distance: Number(r['distance']),
+      detour: Number(r['detour']),
       terrain: r['terrain'] === null ? null : (String(r['terrain']) as Terrain),
     } satisfies Link);
   }

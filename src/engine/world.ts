@@ -16,8 +16,8 @@ export function addSite(world: World, site: Omit<Site, 'id'>): Site {
   return s;
 }
 
-export function addLink(world: World, a: Id, b: Id, distance: number, terrain: Terrain | null): Link {
-  const l: Link = { id: world.links.length + 1, a, b, distance, terrain };
+export function addLink(world: World, a: Id, b: Id, detour: number, terrain: Terrain | null): Link {
+  const l: Link = { id: world.links.length + 1, a, b, detour, terrain };
   world.links.push(l);
   return l;
 }
@@ -41,6 +41,17 @@ export function siteName(world: World, id: Id): string {
 /** 连接的名字：两端据点。 */
 export function linkName(world: World, link: Link): string {
   return siteName(world, link.a) + ' — ' + siteName(world, link.b);
+}
+
+/**
+ * 连接的长度：两端直线距离乘绕行系数。坐标只拿来做两件事——画地图与算这个长度，
+ * 所以挪动一个据点会同时改掉挂在它上面的每一条连接的长度。
+ */
+export function linkLength(world: World, link: Link): number {
+  const a = siteById(world, link.a);
+  const b = siteById(world, link.b);
+  if (!a || !b) return 0;
+  return Math.hypot(a.x - b.x, a.y - b.y) * link.detour;
 }
 
 export function linkById(world: World, id: Id): Link | undefined {
@@ -83,7 +94,7 @@ export function demoWorld(): World {
     morale: 65, stability: 55, money: 800, food: 800, parent: null, faction: shu.id,
   });
 
-  addLink(w, a.id, b.id, 600, 'plain');
+  addLink(w, a.id, b.id, 1, 'plain');
 
   addUnit(w, {
     faction: wei.id, name: '甲队', troops: 500, training: 50, organization: 100,
