@@ -8,6 +8,7 @@ import { DEFAULT_PARAMS } from '../src/engine/params.ts';
 import { tickDay } from '../src/engine/tick.ts';
 import { demoWorld } from '../src/engine/world.ts';
 import {
+  fillParamsGaps,
   loadParams,
   loadWorld,
   logCount,
@@ -95,6 +96,18 @@ saveParams(db, p);
 check('参数往返一致', canon(loadParams(db)) === canon(p));
 const ver = db.prepare('SELECT v FROM meta WHERE k = ?').get('schema_version') as { v: string };
 check('schema 版本记下来了', Number(ver.v) === 1, ver.v);
+
+console.log('\n== 旧库缺字段 ==');
+// 造一份加 theme 之前写下的 params：把它按旧格式塞回 meta 表。
+db.exec("DELETE FROM meta WHERE k = 'params'");
+const legacy = { ...p } as Record<string, unknown>;
+delete legacy['theme'];
+db.prepare('INSERT INTO meta (k, v) VALUES (?, ?)').run('params', JSON.stringify(legacy));
+check('旧 params 读出来确实没有 theme', !Object.hasOwn(loadParams(db) ?? {}, 'theme'));
+const filled = fillParamsGaps(db, p);
+check('补齐时报告缺的字段', filled.length === 1 && filled[0] === 'theme', filled.join('、'));
+check('补齐后 theme 有了', loadParams(db)?.theme === 'light', String(loadParams(db)?.theme));
+check('再补一次不动它', fillParamsGaps(db, p).length === 0);
 
 db.close();
 console.log('\n临时目录：' + dir);

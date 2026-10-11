@@ -1,9 +1,24 @@
+/* Light is the default; :root[data-theme='dark'] overrides the colour tokens. */
 :root {
+  --bg: #f6f7f9;
+  --fg: #1b2027;
+  --dim: #667085;
+  --line: #d4dae1;
+  --acc: #8a5a12;
+  --field: #ffffff;
+  --head: #eceff3;
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
   --bg: #0f1317;
   --fg: #d6e2ee;
   --dim: #7f8fa2;
   --line: #243040;
   --acc: #e8c07a;
+  --field: #111820;
+  --head: #151b22;
+  color-scheme: dark;
 }
 
 * {
@@ -35,6 +50,16 @@ header {
   align-items: center;
 }
 
+/* The theme switch sits at the right end of the control row. */
+.row .push {
+  margin-left: auto;
+}
+
+.tabs {
+  margin-top: 8px;
+  gap: 6px;
+}
+
 .title {
   color: var(--acc);
   font-size: 14px;
@@ -56,7 +81,7 @@ button,
 select,
 input {
   font: inherit;
-  background: #151b22;
+  background: var(--field);
   color: var(--fg);
   border: 1px solid var(--line);
   border-radius: 3px;
@@ -70,6 +95,16 @@ button {
 button.primary {
   border-color: var(--acc);
   color: var(--acc);
+}
+
+button.tab {
+  color: var(--dim);
+}
+
+button.tab.active {
+  border-color: var(--acc);
+  color: var(--acc);
+  font-weight: 600;
 }
 
 main {
@@ -90,7 +125,7 @@ td {
 }
 
 th {
-  background: #151b22;
+  background: var(--head);
   color: var(--dim);
   font-weight: 600;
   white-space: nowrap;
@@ -100,11 +135,16 @@ td input,
 td select {
   width: 100%;
   min-width: 68px;
-  background: #111820;
 }
 
 td input[type='number'] {
   text-align: right;
+}
+
+/* Derived cells: shown, never edited here. */
+td.ro {
+  color: var(--dim);
+  white-space: nowrap;
 }
 
 .log {

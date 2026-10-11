@@ -1,13 +1,13 @@
-// 主进程：开一个窗口，开世界库，暴露四个 IPC 方法。结算与世界都不在这里。
+// 主进程：开一个窗口，开世界库，暴露六个 IPC 方法。结算与世界都不在这里。
 import { app, BrowserWindow, ipcMain } from 'electron';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { DatabaseSync } from 'node:sqlite';
 import { DEFAULT_PARAMS } from '../engine/params.ts';
-import type { World } from '../engine/types.ts';
+import type { Params, World } from '../engine/types.ts';
 import { IPC } from '../shared/ipc.ts';
-import { loadParams, loadWorld, openWorldDb, saveParams, saveWorld, writeSnapshot } from './db.ts';
+import { fillParamsGaps, loadParams, loadWorld, openWorldDb, saveParams, saveWorld, writeSnapshot } from './db.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -30,8 +30,11 @@ function ensureDb(): DatabaseSync {
   fs.mkdirSync(dir, { recursive: true });
   dbFile = path.join(dir, 'world.db');
   db = openWorldDb(dbFile);
-  if (!loadParams(db)) saveParams(db, DEFAULT_PARAMS);
   console.log('[sandbox] 世界库：' + dbFile);
+
+  // The params table gains fields over versions; an older database is missing some.
+  const filled = fillParamsGaps(db, DEFAULT_PARAMS);
+  if (filled.length > 0) console.log('[sandbox] 参数表补上缺的字段：' + filled.join('、'));
   return db;
 }
 
@@ -43,13 +46,13 @@ function resolvePreload(): string | undefined {
 
 function createWindow(): void {
   const preload = resolvePreload();
-  if (!preload) console.warn('[sandbox] 没找到 preload 产物，界面上的四个方法会不可用');
+  if (!preload) console.warn('[sandbox] 没找到 preload 产物，界面上的六个方法会不可用');
 
   const win = new BrowserWindow({
     width: 1360,
     height: 880,
     title: '据点沙盘',
-    backgroundColor: '#0f1317',
+    backgroundColor: '#f6f7f9',
     webPreferences: {
       preload,
       contextIsolation: true,
@@ -78,6 +81,11 @@ function registerIpc(): void {
   });
   ipcMain.handle(IPC.saveWorld, (_e, world: World) => {
     saveWorld(ensureDb(), world);
+    return true;
+  });
+  ipcMain.handle(IPC.loadParams, () => loadParams(ensureDb()));
+  ipcMain.handle(IPC.saveParams, (_e, params: Params) => {
+    saveParams(ensureDb(), params);
     return true;
   });
   ipcMain.handle(IPC.snapshot, async (_e, label: string) => {

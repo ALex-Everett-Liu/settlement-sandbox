@@ -73,6 +73,9 @@ export interface World {
   log: string[];
 }
 
+/** UI theme. Not a settlement number, but it rides with the world, so it lives here. */
+export type Theme = 'light' | 'dark';
+
 /** 参数表。全部是占位值，等数值那一遍重算。 */
 export interface Params {
   daysPerMonth: number;
@@ -95,4 +98,7 @@ export interface Params {
   /** 行军速度基准（地图单位／天），再乘地貌系数与部队系数。 */
   speedBase: number;
   terrainSpeed: Record<Terrain, number>;
+
+  /** UI theme. The engine never reads it; only the shell does. */
+  theme: Theme;
 }

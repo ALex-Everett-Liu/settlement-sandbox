@@ -63,6 +63,22 @@ export function loadParams(db: DatabaseSync): Params | null {
   return raw ? (JSON.parse(raw) as Params) : null;
 }
 
+/**
+ * The params table gains fields over versions. A database written by an older build
+ * holds only part of them, so the keys read back short. Fill the gaps from the
+ * defaults and write the whole table back. Returns the names of the fields filled.
+ */
+export function fillParamsGaps(db: DatabaseSync, fallback: Params): string[] {
+  const stored = loadParams(db);
+  if (!stored) {
+    saveParams(db, fallback);
+    return [];
+  }
+  const missing = Object.keys(fallback).filter((k) => !Object.hasOwn(stored, k));
+  if (missing.length > 0) saveParams(db, { ...fallback, ...stored });
+  return missing;
+}
+
 /** 世界整体写回。一次事务里清空再加，简单且不会写坏。日志只追加新的那些行。 */
 export function saveWorld(db: DatabaseSync, world: World): void {
   const storedLog = Number(metaGet(db, 'log_count') ?? '0');

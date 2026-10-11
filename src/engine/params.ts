@@ -25,4 +25,7 @@ export const DEFAULT_PARAMS: Params = {
 
   speedBase: 120,
   terrainSpeed: { plain: 1, hill: 0.8, mountain: 0.55, water: 0.7, pass: 0.6 },
+
+  /** The window opens light; the toggle writes the other value back to the database. */
+  theme: 'light',
 };
