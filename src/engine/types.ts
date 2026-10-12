@@ -87,8 +87,10 @@ export interface Site {
   /** 坐标：原点在左下角，x 向右、y 向上，范围是 0..mapWidth × 0..mapHeight。只用来画地图与算连接长度。 */
   x: number;
   y: number;
-  /** 规模 1–5，与人口各自独立填。 */
-  scale: number;
+  /** 发展度 0–100，一位小数：产出与 upkeep 按它算，地图上记号的大小也按它。 */
+  development: number;
+  /** 防御设施等级 0–10，一位小数。现在只由 User 声明，不参与结算（战斗还没做）。 */
+  fortification: number;
   population: number;
   /** 民心 0–100，偏产出与征兵。 */
   morale: number;
@@ -157,12 +159,12 @@ export type Theme = 'light' | 'dark';
 export interface Params {
   daysPerMonth: number;
   monthsPerYear: number;
-  /** 金钱产出 = moneyPerScale × 规模 × (民心 ÷ moraleRef)。 */
-  moneyPerScale: number;
-  foodPerScale: number;
+  /** 金钱产出 = moneyPerDevelopment × 发展度 × (民心 ÷ moraleRef)。 */
+  moneyPerDevelopment: number;
+  foodPerDevelopment: number;
   moraleRef: number;
-  upkeepMoneyPerScale: number;
-  upkeepFoodPerScale: number;
+  upkeepMoneyPerDevelopment: number;
+  upkeepFoodPerDevelopment: number;
   /** 每兵每天口粮。 */
   unitFoodPerTroop: number;
   /** 民心每月向 moraleBaseline 靠拢的比例。 */

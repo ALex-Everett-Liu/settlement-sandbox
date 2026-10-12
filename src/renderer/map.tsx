@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from 'react';
 import { mulberry32 } from '../engine/rng.ts';
 import type { Params, Site, Theme, Unit, World } from '../engine/types.ts';
 import { siteGarrison, unitPoint } from '../engine/world.ts';
-import { garrisonText, placeText, round2 } from './format.ts';
+import { garrisonText, placeText, round1, round2 } from './format.ts';
 
 /** 生成地形用的固定种子：同一份参数每次生成出同一张图。 */
 const TERRAIN_SEED = 20261011;
@@ -82,8 +82,14 @@ function px(scene: Scene, screenPx: number): number {
   return screenPx / scene.zoom;
 }
 
+/**
+ * 记号的大小按发展度（0–100）：折成 0–5 那一档再乘 0.9，所以发展度 20、40、60、80、100
+ * 与拆成两个字段之前规模 1–5 画得一样大。越界的数在写入处就挡住了，这里再夹一次边界，
+ * 免得手改过的库把记号画成负半径。
+ */
 function siteRadius(site: Site): number {
-  return 3 + Math.min(5, site.scale) * 0.9;
+  const step = Math.min(5, Math.max(0, site.development) / 20);
+  return 3 + step * 0.9;
 }
 
 /**
@@ -733,8 +739,14 @@ export function MapView({
     redraw(scene, worldRef.current, params);
   }, [theme, params]);
 
-  // 据点或连线的几何变了（新增、删掉、改坐标、改规模）：重建据点那一层。
-  const siteKey = world.sites.map((s) => s.id + ':' + s.x + ',' + s.y + ',' + s.scale + ',' + String(s.parent ?? 0)).join('|');
+  // 据点那一层画的是坐标、记号的档（层级）、大小（发展度）、治所那一圈与所属据点那一圈，
+  // 所以这些东西任何一个变了都要重建：它们（连同各辖区的治所）全都进这个键。
+  const siteKey =
+    world.sites
+      .map((s) => [s.id, s.x, s.y, s.level, s.development, s.parent ?? 0].join(':'))
+      .join('|') +
+    '|seat:' +
+    world.divisions.map((d) => d.seat ?? 0).join(',');
   const linkKey = world.links.map((l) => l.id + ':' + l.a + '-' + l.b).join('|');
   useEffect(() => {
     const scene = sceneRef.current;
@@ -827,7 +839,10 @@ export function MapView({
             <>
               <strong>{hover.site.name}</strong>
               <div>
-                规模 {hover.site.scale} · 人口 {hover.site.population} · 第 {hover.level} 层
+                发展度 {round1(hover.site.development)} · 防御 {round1(hover.site.fortification)} 级
+              </div>
+              <div>
+                人口 {hover.site.population} · 第 {hover.level} 层
               </div>
               <div>
                 辖区{' '}

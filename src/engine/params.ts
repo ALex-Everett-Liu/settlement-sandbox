@@ -8,11 +8,16 @@ export const DEFAULT_PARAMS: Params = {
   daysPerMonth: 30,
   monthsPerYear: 12,
 
-  moneyPerScale: 20,
-  foodPerScale: 30,
+  /**
+   * 产出与 upkeep 按发展度（0–100，一位小数）算。这四个数由原来那一套按规模 1–5 的
+   * 系数各除以 20 得来，所以同一座城（发展度 = 规模 × 20）算出来的钱粮与改之前一样。
+   * 仍然是占位值，等数值那一遍重算。
+   */
+  moneyPerDevelopment: 1,
+  foodPerDevelopment: 1.5,
   moraleRef: 70,
-  upkeepMoneyPerScale: 5,
-  upkeepFoodPerScale: 0,
+  upkeepMoneyPerDevelopment: 0.25,
+  upkeepFoodPerDevelopment: 0,
 
   /** 原来是「每兵每月 0.05」，这里摊到每天。 */
   unitFoodPerTroop: 0.05 / 30,

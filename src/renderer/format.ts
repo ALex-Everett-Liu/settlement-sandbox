@@ -27,6 +27,11 @@ export function round2(v: number): number {
   return Math.round(v * 100) / 100;
 }
 
+/** 一位小数：发展度、防御设施等级、民心、稳定度这些格子里显示用。 */
+export function round1(v: number): number {
+  return Math.round(v * 10) / 10;
+}
+
 /** 一个坐标点怎么写。 */
 function point(x: number, y: number): string {
   return '（' + String(round2(x)) + ', ' + String(round2(y)) + '）';

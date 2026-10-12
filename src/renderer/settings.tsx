@@ -1,5 +1,20 @@
 // 设置页签：地图与缩放这四个数，加上主题。其余参数还等第四块那张参数表。
 import type { Params, Theme, World } from '../engine/types.ts';
+import { NumberCell } from './tables.tsx';
+
+/**
+ * 这四个数各自的上下限与中文名。越界的写法一律挡回来（见 App 的 paramsRefusal），
+ * 由界面把理由写进说明行，等 User 自己改一个数——不夹到边界，也不替 User 改数。
+ */
+export const PARAM_RANGE: Record<
+  'mapWidth' | 'mapHeight' | 'zoomMin' | 'zoomMax',
+  { label: string; lo: number; hi: number; step: number }
+> = {
+  mapWidth: { label: '地图宽', lo: 100, hi: 1000000, step: 1 },
+  mapHeight: { label: '地图高', lo: 100, hi: 1000000, step: 1 },
+  zoomMin: { label: '倍数下界', lo: 0.0001, hi: 1, step: 0.001 },
+  zoomMax: { label: '倍数上界', lo: 0.01, hi: 100, step: 0.5 },
+};
 
 interface SettingsProps {
   world: World;
@@ -7,11 +22,8 @@ interface SettingsProps {
   /** 与界面一致的那个主题值（params.theme 缺了就按浅色算）。 */
   theme: Theme;
   onChange: (patch: Partial<Params>) => void;
-}
-
-function toNumber(text: string, fallback: number): number {
-  const n = Number(text);
-  return Number.isFinite(n) ? n : fallback;
+  /** 哪一格写了写不回去的值：报给说明行，值留在格子里等 User 自己改。 */
+  onNote: (message: string) => void;
 }
 
 /** 自适应倍数：与地图打开时用的是同一个式子（画布宽高按当前窗口估）。 */
@@ -21,7 +33,7 @@ function fitZoom(params: Params): number {
   return Math.min((width - 40) / params.mapWidth, (height - 40) / params.mapHeight);
 }
 
-export function SettingsView({ world, params, theme, onChange }: SettingsProps) {
+export function SettingsView({ world, params, theme, onChange, onNote }: SettingsProps) {
   const outside = world.sites.filter(
     (s) => s.x < 0 || s.x > params.mapWidth || s.y < 0 || s.y > params.mapHeight,
   ).length;
@@ -64,10 +76,15 @@ export function SettingsView({ world, params, theme, onChange }: SettingsProps) 
           <tr>
             <td className="ro">地图宽</td>
             <td>
-              <input
-                type="number"
+              <NumberCell
                 value={params.mapWidth}
-                onChange={(e) => onChange({ mapWidth: toNumber(e.target.value, params.mapWidth) })}
+                min={PARAM_RANGE.mapWidth.lo}
+                max={PARAM_RANGE.mapWidth.hi}
+                step={PARAM_RANGE.mapWidth.step}
+                label="地图宽"
+                title="坐标 x 的范围是 0 到这个数。100 到 1000000 之间。"
+                onCommit={(v) => onChange({ mapWidth: v })}
+                onNote={onNote}
               />
             </td>
             <td className="ro">坐标 x 的范围是 0 到这个数。改了之后网格、边框与刻度数字跟着重画。</td>
@@ -75,10 +92,15 @@ export function SettingsView({ world, params, theme, onChange }: SettingsProps) 
           <tr>
             <td className="ro">地图高</td>
             <td>
-              <input
-                type="number"
+              <NumberCell
                 value={params.mapHeight}
-                onChange={(e) => onChange({ mapHeight: toNumber(e.target.value, params.mapHeight) })}
+                min={PARAM_RANGE.mapHeight.lo}
+                max={PARAM_RANGE.mapHeight.hi}
+                step={PARAM_RANGE.mapHeight.step}
+                label="地图高"
+                title="坐标 y 的范围是 0 到这个数。100 到 1000000 之间。"
+                onCommit={(v) => onChange({ mapHeight: v })}
+                onNote={onNote}
               />
             </td>
             <td className="ro">坐标 y 的范围是 0 到这个数。</td>
@@ -86,11 +108,15 @@ export function SettingsView({ world, params, theme, onChange }: SettingsProps) 
           <tr>
             <td className="ro">倍数下界</td>
             <td>
-              <input
-                type="number"
-                step="0.001"
+              <NumberCell
                 value={params.zoomMin}
-                onChange={(e) => onChange({ zoomMin: toNumber(e.target.value, params.zoomMin) })}
+                min={PARAM_RANGE.zoomMin.lo}
+                max={PARAM_RANGE.zoomMin.hi}
+                step={PARAM_RANGE.zoomMin.step}
+                label="倍数下界"
+                title="最多缩到这么小。0.0001 到 1 之间，而且不能大于倍数上界。"
+                onCommit={(v) => onChange({ zoomMin: v })}
+                onNote={onNote}
               />
             </td>
             <td className="ro">最多缩到这么小。地图一大，自适应倍数会比它更小，所以「缩到全图」不受它限制。</td>
@@ -98,11 +124,15 @@ export function SettingsView({ world, params, theme, onChange }: SettingsProps) 
           <tr>
             <td className="ro">倍数上界</td>
             <td>
-              <input
-                type="number"
-                step="0.5"
+              <NumberCell
                 value={params.zoomMax}
-                onChange={(e) => onChange({ zoomMax: toNumber(e.target.value, params.zoomMax) })}
+                min={PARAM_RANGE.zoomMax.lo}
+                max={PARAM_RANGE.zoomMax.hi}
+                step={PARAM_RANGE.zoomMax.step}
+                label="倍数上界"
+                title="最多放到这么大。0.01 到 100 之间，而且不能小于倍数下界。"
+                onCommit={(v) => onChange({ zoomMax: v })}
+                onNote={onNote}
               />
             </td>
             <td className="ro">最多放到这么大。放到 1 以上时，1 个地图单位比 1 个像素还宽。</td>

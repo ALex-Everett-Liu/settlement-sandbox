@@ -23,11 +23,45 @@ import {
 } from '../engine/world.ts';
 import type { SandboxApi } from '../shared/ipc.ts';
 import { MapView } from './map.tsx';
-import { SettingsView } from './settings.tsx';
+import { SettingsView, PARAM_RANGE } from './settings.tsx';
 import { DivisionTable, FactionTable, LinkTable, SiteTable, UnitTable } from './tables.tsx';
 
 const api = (window as unknown as { sandbox?: SandboxApi }).sandbox;
 const SPEEDS = [1, 2, 4, 8, 16];
+
+/**
+ * 两个有上下限的据点字段。写不回去就返回理由：值一个也不动，更不夹到边界——
+ * 由界面把理由写进说明行，等 User 自己改一个数。
+ */
+function siteNumberRefusal(patch: Partial<Site>): string | null {
+  if (patch.development !== undefined && !(patch.development >= 0 && patch.development <= 100)) {
+    return '发展度只收 0 到 100 之间的数，「' + String(patch.development) + '」不写回去';
+  }
+  if (patch.fortification !== undefined && !(patch.fortification >= 0 && patch.fortification <= 10)) {
+    return '防御设施等级只收 0 到 10 之间的数，「' + String(patch.fortification) + '」不写回去';
+  }
+  return null;
+}
+
+/** 设置页签的一笔改动能不能写回：越界、以及上界小于下界，都挡回来，不动 User 填的数。 */
+function paramsRefusal(params: Params, patch: Partial<Params>): string | null {
+  for (const key of ['mapWidth', 'mapHeight', 'zoomMin', 'zoomMax'] as const) {
+    const v = patch[key];
+    if (v === undefined) continue;
+    const r = PARAM_RANGE[key];
+    if (!(v >= r.lo && v <= r.hi)) {
+      return r.label + '只收 ' + String(r.lo) + ' 到 ' + String(r.hi) + ' 之间的数，「' + String(v) + '」不写回去';
+    }
+  }
+  const zoomMin = patch.zoomMin ?? params.zoomMin;
+  const zoomMax = patch.zoomMax ?? params.zoomMax;
+  if (zoomMax < zoomMin) {
+    return (
+      '倍数上界不能小于下界（下界 ' + String(zoomMin) + '、上界 ' + String(zoomMax) + '），这一笔不写回去'
+    );
+  }
+  return null;
+}
 
 type View = 'factions' | 'divisions' | 'sites' | 'units' | 'links' | 'map' | 'settings';
 
@@ -149,6 +183,11 @@ export function App() {
       if (!w) return;
       const s = w.sites.find((x) => x.id === id);
       if (!s) return;
+      const why = siteNumberRefusal(patch);
+      if (why !== null) {
+        setNote(why);
+        return;
+      }
       Object.assign(s, patch);
       commit(w);
     },
@@ -359,18 +398,15 @@ export function App() {
     setNote('快照：' + p);
   }, []);
 
-  /** 设置页签改参数：先夹一道范围，再写回世界库（主题也在这一页里改）。 */
+  /** 设置页签改参数：越界与上下界颠倒都挡回来，值不写回、也不替 User 改数。 */
   const writeParams = useCallback(
     (patch: Partial<Params>) => {
-      const next: Params = { ...params, ...patch };
-      next.mapWidth = Math.round(Math.min(1000000, Math.max(100, next.mapWidth)));
-      next.mapHeight = Math.round(Math.min(1000000, Math.max(100, next.mapHeight)));
-      next.zoomMin = Math.min(1, Math.max(0.0001, next.zoomMin));
-      next.zoomMax = Math.min(100, Math.max(0.01, next.zoomMax));
-      if (next.zoomMax < next.zoomMin) {
-        if (patch.zoomMax !== undefined) next.zoomMin = next.zoomMax;
-        else next.zoomMax = next.zoomMin;
+      const why = paramsRefusal(params, patch);
+      if (why !== null) {
+        setNote(why);
+        return;
       }
+      const next: Params = { ...params, ...patch };
       setParams(next);
       if (api) void api.saveParams(next);
     },
@@ -539,7 +575,7 @@ export function App() {
       if (!w) return;
       const s = addSite(w, {
         name: '新据点 ' + String(w.sites.length + 1),
-        x, y, scale: 1, population: 0, morale: 70, stability: 60,
+        x, y, development: 20, fortification: 0, population: 0, morale: 70, stability: 60,
         money: 0, food: 0, parent: null, level: 0, division: null, faction: w.factions[0]?.id ?? 1,
       });
       commit(w);
@@ -876,6 +912,7 @@ export function App() {
                 onOnly={setOnlySite}
                 onEditLevel={editSiteLevel}
                 onEditDivision={editSiteDivision}
+                onNote={setNote}
               />
             ) : view === 'units' ? (
               <UnitTable
@@ -890,7 +927,7 @@ export function App() {
             ) : view === 'links' ? (
               <LinkTable world={world} onEdit={editLink} onDelete={deleteLink} />
             ) : view === 'settings' ? (
-              <SettingsView world={world} params={params} theme={theme} onChange={writeParams} />
+              <SettingsView world={world} params={params} theme={theme} onChange={writeParams} onNote={setNote} />
             ) : null}
           </>
         )}

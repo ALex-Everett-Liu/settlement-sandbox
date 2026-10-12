@@ -341,11 +341,11 @@ export function demoWorld(): World {
   const shu = addFaction(w, '蜀');
 
   const a = addSite(w, {
-    name: 'A 城', x: 1000, y: 2000, scale: 3, population: 9000,
+    name: 'A 城', x: 1000, y: 2000, development: 60, fortification: 2, population: 9000,
     morale: 70, stability: 60, money: 1000, food: 1000, parent: null, level: 0, division: null, faction: wei.id,
   });
   const b = addSite(w, {
-    name: 'B 城', x: 3000, y: 2500, scale: 2, population: 6000,
+    name: 'B 城', x: 3000, y: 2500, development: 40, fortification: 0, population: 6000,
     morale: 65, stability: 55, money: 800, food: 800, parent: null, level: 0, division: null, faction: shu.id,
   });
 

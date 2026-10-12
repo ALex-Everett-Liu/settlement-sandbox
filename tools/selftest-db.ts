@@ -107,7 +107,7 @@ console.log('\n== 参数表与版本 ==');
 saveParams(db, p);
 check('参数往返一致', canon(loadParams(db)) === canon(p));
 const ver = db.prepare('SELECT v FROM meta WHERE k = ?').get('schema_version') as { v: string };
-check('schema 版本记下来了', Number(ver.v) === 6, ver.v);
+check('schema 版本记下来了', Number(ver.v) === 7, ver.v);
 
 console.log('\n== 旧库缺字段 ==');
 // 造一份加 theme 之前写下的 params：把它按旧格式塞回 meta 表。
@@ -139,7 +139,7 @@ old.close();
 
 const up = openWorldDb(legacyPath);
 const ver2 = up.prepare('SELECT v FROM meta WHERE k = ?').get('schema_version') as { v: string };
-check('版本升到 6', Number(ver2.v) === 6, ver2.v);
+check('版本升到 7', Number(ver2.v) === 7, ver2.v);
 const kept = up.prepare('SELECT detour, terrain FROM links WHERE id = 1').get() as {
   detour: number;
   terrain: string | null;
@@ -166,7 +166,7 @@ const keptDay = up.prepare('SELECT v FROM meta WHERE k = ?').get('day') as { v: 
 check('day 没被动过', Number(keptDay.v) === 7, keptDay.v);
 up.close();
 
-console.log('\n== v3 升 v5：层级初值与辖区表 ==');
+console.log('\n== v3 升 v7：层级初值、辖区表与拆开的两个新字段 ==');
 // 造一份 v3 形状的库：sites 没有 level 列，B 挂在 A 下面（A 应当拿第 1 层、B 拿第 0 层）。
 const v3Path = path.join(dir, 'legacy-v3.db');
 const v3 = new DatabaseSync(v3Path);
@@ -190,7 +190,7 @@ v3.close();
 
 const up3 = openWorldDb(v3Path);
 const ver3 = up3.prepare('SELECT v FROM meta WHERE k = ?').get('schema_version') as { v: string };
-check('v3 的库升到 6', Number(ver3.v) === 6, ver3.v);
+check('v3 的库升到 7', Number(ver3.v) === 7, ver3.v);
 const lv = up3.prepare('SELECT id, level FROM sites ORDER BY id').all() as Array<{ id: number; level: number }>;
 check('升级时按上下级算出层级初值', Number(lv[0]?.level) === 1 && Number(lv[1]?.level) === 0, JSON.stringify(lv));
 const divTable = up3
@@ -199,10 +199,29 @@ const divTable = up3
 check('有了 divisions 表', divTable !== undefined, String(divTable?.name));
 const divCount = up3.prepare('SELECT COUNT(*) AS n FROM divisions').get() as { n: number };
 check('辖区是空的，等 User 自己建', Number(divCount.n) === 0, String(divCount.n));
+const siteCols3 = (
+  up3.prepare("SELECT name FROM pragma_table_info('sites')").all() as Array<{ name: string }>
+).map((r) => r.name);
+check(
+  'sites 有了 development 与 fortification',
+  siteCols3.includes('development') && siteCols3.includes('fortification'),
+  siteCols3.join('、'),
+);
+check('老的 scale 列没了', !siteCols3.includes('scale'));
+const grown3 = up3.prepare('SELECT id, development, fortification FROM sites ORDER BY id').all() as Array<{
+  id: number;
+  development: number;
+  fortification: number;
+}>;
+check(
+  '规模 1 折成发展度 20、防御设施等级 0',
+  Number(grown3[0]?.development) === 20 && Number(grown3[0]?.fortification) === 0,
+  JSON.stringify(grown3),
+);
 check('升级前留了 v3 的副本', fs.existsSync(path.join(dir, 'legacy-v3.v3-backup.db')));
 up3.close();
 
-console.log('\n== v5 升 v6：自由坐标五列 ==');
+console.log('\n== v5 升 v7：自由坐标五列与拆开的两个新字段 ==');
 // 造一份 v5 形状的库：units 有 food_policy，但没有自由坐标那几列。
 const v5Path = path.join(dir, 'legacy-v5.db');
 const v5 = new DatabaseSync(v5Path);
@@ -240,7 +259,7 @@ v5.close();
 
 const up5 = openWorldDb(v5Path);
 const ver5 = up5.prepare('SELECT v FROM meta WHERE k = ?').get('schema_version') as { v: string };
-check('v5 的库升到 6', Number(ver5.v) === 6, ver5.v);
+check('v5 的库升到 7', Number(ver5.v) === 7, ver5.v);
 const unitCols5 = (
   up5.prepare("SELECT name FROM pragma_table_info('units')").all() as Array<{ name: string }>
 ).map((r) => r.name);
@@ -259,6 +278,15 @@ check(
   keptUnit.place_kind === 'site' && Number(keptUnit.place_site) === 1 && keptUnit.place_x === null,
 );
 check('升级前留了 v5 的副本', fs.existsSync(path.join(dir, 'legacy-v5.v5-backup.db')));
+const grown5 = up5.prepare('SELECT development, fortification FROM sites WHERE id = 1').get() as {
+  development: number;
+  fortification: number;
+};
+check(
+  'v5 那一点也按 规模 × 20 折过来，防御设施等级从 0 起',
+  Number(grown5.development) === 20 && Number(grown5.fortification) === 0,
+  JSON.stringify(grown5),
+);
 up5.close();
 
 console.log('\n== 据点之外的位置往返 ==');

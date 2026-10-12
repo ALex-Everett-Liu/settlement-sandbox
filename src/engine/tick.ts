@@ -230,10 +230,10 @@ function consumeFood(world: World, u: Unit, p: Params): void {
 export function settleMonth(world: World, p: Params): void {
   for (const s of world.sites) {
     const moraleFactor = s.morale / p.moraleRef;
-    const income = Math.round(p.moneyPerScale * s.scale * moraleFactor);
-    const harvest = Math.round(p.foodPerScale * s.scale * moraleFactor);
-    const moneyCost = Math.round(p.upkeepMoneyPerScale * s.scale);
-    const foodCost = Math.round(p.upkeepFoodPerScale * s.scale);
+    const income = Math.round(p.moneyPerDevelopment * s.development * moraleFactor);
+    const harvest = Math.round(p.foodPerDevelopment * s.development * moraleFactor);
+    const moneyCost = Math.round(p.upkeepMoneyPerDevelopment * s.development);
+    const foodCost = Math.round(p.upkeepFoodPerDevelopment * s.development);
 
     s.money += income - moneyCost;
     s.food += harvest - foodCost;

@@ -4,7 +4,7 @@
 import { useRef, useState } from 'react';
 import type { Link, Order, Site, Terrain, Unit, World } from '../engine/types.ts';
 import { divisionName, divisionSites, linkLength, siteBranch } from '../engine/world.ts';
-import { factionName, garrisonText, orderText, placeText, round2, siteName, TERRAIN_LABEL, TERRAINS } from './format.ts';
+import { factionName, garrisonText, orderText, placeText, round1, round2, siteName, TERRAIN_LABEL, TERRAINS } from './format.ts';
 
 function toNumber(text: string, fallback: number): number {
   if (text.trim() === '') return fallback;
@@ -12,9 +12,59 @@ function toNumber(text: string, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
-/** Display rounding: a raw value like 99.16666666666667 does not fit in a cell. */
-function round1(v: number): number {
-  return Math.round(v * 10) / 10;
+/** 这个字是不是一个落在 [min, max] 里的数。 */
+function inRange(text: string, min: number, max: number): boolean {
+  if (text.trim() === '') return false;
+  const n = Number(text);
+  return Number.isFinite(n) && n >= min && n <= max;
+}
+
+/**
+ * 数字格：只有落进 [min, max] 的数才写回世界。写不进去的值留在格子里并标红，
+ * 由 onNote 报一句，等 User 自己改回来——不夹到边界，也不替 User 改数。
+ * 草稿在输入期间一直留着（不然敲「12.」时最后那个小数点会被顶掉），焦点离开时才与世界的值对齐；
+ * 越界的草稿离开焦点也留着，直到改成一个写得回去的数。
+ */
+export function NumberCell({
+  value, min, max, step, label, title, onCommit, onNote,
+}: {
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  label: string;
+  title: string;
+  onCommit: (v: number) => void;
+  onNote: (message: string) => void;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const text = draft ?? String(round1(value));
+  const bad = draft !== null && !inRange(draft, min, max);
+
+  return (
+    <input
+      className={bad ? 'bad' : undefined}
+      type="number"
+      step={step}
+      value={text}
+      title={title}
+      onChange={(e) => {
+        const t = e.target.value;
+        setDraft(t);
+        if (inRange(t, min, max)) {
+          onCommit(Number(t));
+          return;
+        }
+        onNote(
+          label + '只收 ' + String(min) + ' 到 ' + String(max) + ' 之间的数：' +
+            (t.trim() === '' ? '格子还空着' : '「' + t + '」写不回去') + '。改一个数再写，别的不动。',
+        );
+      }}
+      onBlur={() => {
+        if (draft === null || inRange(draft, min, max)) setDraft(null);
+      }}
+    />
+  );
 }
 
 /** 上级那一格写这个字代表「没有上级」。它也在可选名字里，所以能被重新清掉。 */
@@ -266,6 +316,8 @@ interface SiteTableProps {
   onEditLevel: (id: number, level: number) => void;
   /** 挑辖区：名字类，过滤输入框；与据点自己那个层级对不上时只在说明行提一句。 */
   onEditDivision: (id: number, division: number | null) => void;
+  /** 哪一格写了写不回去的值：把它报给说明行，值留在格子里等 User 自己改。 */
+  onNote: (message: string) => void;
 }
 
 export function SiteTable({
@@ -281,6 +333,7 @@ export function SiteTable({
   onOnly,
   onEditLevel,
   onEditDivision,
+  onNote,
 }: SiteTableProps) {
   if (world.sites.length === 0) return <p className="dim">还没有据点。</p>;
 
@@ -330,7 +383,8 @@ export function SiteTable({
       <thead>
         <tr>
           <th>名称</th>
-          <th>规模</th>
+          <th>发展度</th>
+          <th>防御设施等级</th>
           <th>人口</th>
           <th>民心</th>
           <th>稳定度</th>
@@ -353,10 +407,27 @@ export function SiteTable({
               <input value={s.name} onChange={(e) => onEdit(s.id, { name: e.target.value })} />
             </td>
             <td>
-              <input
-                type="number"
-                value={s.scale}
-                onChange={(e) => onEdit(s.id, { scale: toNumber(e.target.value, s.scale) })}
+              <NumberCell
+                value={s.development}
+                min={0}
+                max={100}
+                step={0.1}
+                label="发展度"
+                title="发展度 0–100，一位小数：钱粮产出与 upkeep 按它算，地图上记号的大小也按它。"
+                onCommit={(v) => onEdit(s.id, { development: v })}
+                onNote={onNote}
+              />
+            </td>
+            <td>
+              <NumberCell
+                value={s.fortification}
+                min={0}
+                max={10}
+                step={0.1}
+                label="防御设施等级"
+                title="防御设施等级 0–10，一位小数。现在只由 User 声明，不参与结算（战斗还没做）。"
+                onCommit={(v) => onEdit(s.id, { fortification: v })}
+                onNote={onNote}
               />
             </td>
             <td>

@@ -53,6 +53,11 @@ const wA = w.sites[0]!;
 const wB = w.sites[1]!;
 const wL = w.links[0]!;
 check(
+  '据点的发展度与防御设施等级各自独立',
+  wA.development === 60 && wA.fortification === 2 && wB.development === 40 && wB.fortification === 0,
+  String(wA.development) + '／' + String(wA.fortification) + '、' + String(wB.development) + '／' + String(wB.fortification),
+);
+check(
   '连接的两端就是那两座城',
   (wL.a === wA.id && wL.b === wB.id) || (wL.a === wB.id && wL.b === wA.id),
 );

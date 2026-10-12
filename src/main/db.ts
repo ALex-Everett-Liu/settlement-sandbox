@@ -19,7 +19,7 @@ import type {
 } from '../engine/types.ts';
 import { emptyWorld, levelsFromParents } from '../engine/world.ts';
 
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS divisions (
 );
 CREATE TABLE IF NOT EXISTS sites (
   id INTEGER PRIMARY KEY, name TEXT NOT NULL, x REAL NOT NULL, y REAL NOT NULL,
-  scale INTEGER NOT NULL, population INTEGER NOT NULL, morale REAL NOT NULL,
+  development REAL NOT NULL, fortification REAL NOT NULL,
+  population INTEGER NOT NULL, morale REAL NOT NULL,
   stability REAL NOT NULL, money REAL NOT NULL, food REAL NOT NULL,
   parent INTEGER, level INTEGER NOT NULL, division INTEGER, faction INTEGER NOT NULL
 );
@@ -142,6 +143,29 @@ function migrate(db: DatabaseSync, dbPath: string, from: number): void {
       }
       steps.push('units 加自由坐标五列（place_x／place_y／place_tx／place_ty／place_factor）');
     }
+    if (from < 7) {
+      // 规模拆成两个数：发展度（原来那个规模折算成 0–100）与防御设施等级（从 0 起，
+      // 旧数据没有这一项）。SQLite 改不了现成列的名字与类型，按老办法把这张表重建一次。
+      if (hasColumn(db, 'sites', 'scale')) {
+        db.exec(
+          'CREATE TABLE sites_v7 (id INTEGER PRIMARY KEY, name TEXT NOT NULL, x REAL NOT NULL, y REAL NOT NULL,' +
+            ' development REAL NOT NULL, fortification REAL NOT NULL, population INTEGER NOT NULL,' +
+            ' morale REAL NOT NULL, stability REAL NOT NULL, money REAL NOT NULL, food REAL NOT NULL,' +
+            ' parent INTEGER, level INTEGER NOT NULL, division INTEGER, faction INTEGER NOT NULL)',
+        );
+        db.exec(
+          'INSERT INTO sites_v7 (id, name, x, y, development, fortification, population, morale, stability,' +
+            ' money, food, parent, level, division, faction)' +
+            ' SELECT id, name, x, y, scale * 20, 0, population, morale, stability, money, food, parent, level,' +
+            ' division, faction FROM sites',
+        );
+        db.exec('DROP TABLE sites');
+        db.exec('ALTER TABLE sites_v7 RENAME TO sites');
+        steps.push('sites 去掉 scale，拆成 development（= 规模 × 20）与 fortification（0）');
+      } else {
+        steps.push('sites 还没有 scale 可用，两个新字段照建表时的默认走');
+      }
+    }
     metaSet(db, 'schema_version', String(SCHEMA_VERSION));
     db.exec('COMMIT');
   } catch (e) {
@@ -250,12 +274,12 @@ export function saveWorld(db: DatabaseSync, world: World): void {
     for (const d of world.divisions) insDivision.run(d.id, d.name, d.rank, d.parent, d.seat);
 
     const insSite = db.prepare(
-      'INSERT INTO sites (id, name, x, y, scale, population, morale, stability, money, food, parent, level, division, faction)' +
-        ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO sites (id, name, x, y, development, fortification, population, morale, stability, money, food, parent, level, division, faction)' +
+        ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     );
     for (const s of world.sites) {
       insSite.run(
-        s.id, s.name, s.x, s.y, s.scale, s.population, s.morale,
+        s.id, s.name, s.x, s.y, s.development, s.fortification, s.population, s.morale,
         s.stability, s.money, s.food, s.parent, s.level, s.division, s.faction,
       );
     }
@@ -319,7 +343,8 @@ export function loadWorld(db: DatabaseSync): World {
   for (const r of db.prepare('SELECT * FROM sites ORDER BY id').all() as Array<Record<string, unknown>>) {
     w.sites.push({
       id: Number(r['id']), name: String(r['name']), x: Number(r['x']), y: Number(r['y']),
-      scale: Number(r['scale']), population: Number(r['population']), morale: Number(r['morale']),
+      development: Number(r['development']), fortification: Number(r['fortification']),
+      population: Number(r['population']), morale: Number(r['morale']),
       stability: Number(r['stability']), money: Number(r['money']), food: Number(r['food']),
       parent: r['parent'] === null ? null : Number(r['parent']),
       level: Number(r['level'] ?? 0),
