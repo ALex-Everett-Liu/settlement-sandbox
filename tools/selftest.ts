@@ -22,19 +22,26 @@ import {
 import type { Row } from '../src/renderer/paging.ts';
 import {
   addDivision,
+  addFaction,
   addTerrain,
+  colorNumber,
+  colorRefusal,
   demoWorld,
   destinationName,
   divisionRankRefusal,
   divisionSites,
   divisionTotals,
   divisionWouldCycle,
+  factionColor,
   factionTotals,
+  FACTION_COLORS,
   levelRefusal,
   linkLength,
   linkTerrain,
+  normalizeColor,
   parentLevelRefusal,
   parentWouldCycle,
+  sameColorFactions,
   seatRefusal,
   siteBranch,
   siteDivisionNote,
@@ -443,6 +450,62 @@ check('倍率落在命令上', o16.kind === 'offroad' && o16.factor === 0.4, o16
 check('目的地记得是那座据点', o16.kind === 'offroad' && o16.toSite === s16b.id);
 check('答完写了日志', w16.log.some((line) => line.includes('领命离开道路')));
 check('答完 pending 清空', w16.pending === null);
+
+console.log('\n== 势力颜色 ==');
+// 颜色存在势力行上，只有地图与表里的色块读它；引擎不拿它算任何数。写法只收 #rrggbb。
+check(
+  '内置色板十二个，写法都对，互不相同',
+  FACTION_COLORS.length === 12 &&
+    new Set(FACTION_COLORS).size === 12 &&
+    FACTION_COLORS.every((c) => colorRefusal(c) === null && colorNumber(c) !== null),
+  FACTION_COLORS.join(' '),
+);
+check(
+  '颜色收 #rrggbb，大小写与两头空白都认',
+  colorRefusal('#dc2626') === null && colorRefusal('#DC2626') === null && colorRefusal('  #dc2626 ') === null,
+);
+check(
+  '颜色挡掉别的写法',
+  colorRefusal('red') !== null &&
+    colorRefusal('#abc') !== null &&
+    colorRefusal('#gggggg') !== null &&
+    colorRefusal('dc2626') !== null &&
+    colorRefusal('') !== null,
+  colorRefusal('red') ?? '',
+);
+check('写回的写法一律折成小写', normalizeColor('#DC2626') === '#dc2626' && normalizeColor(' #AbC123 ') === '#abc123');
+check(
+  '#rrggbb 折成画布上用的那个数',
+  colorNumber('#dc2626') === 0xdc2626 && colorNumber('#000000') === 0 && colorNumber('red') === null,
+  String(colorNumber('#dc2626')),
+);
+const wColor = demoWorld();
+check(
+  '最小世界两家颜色不一样',
+  wColor.factions[0]!.color === FACTION_COLORS[0]! && wColor.factions[1]!.color === FACTION_COLORS[1]!,
+  wColor.factions.map((f) => f.color).join('、'),
+);
+const wuColor = addFaction(wColor, '吴');
+check('新势力接着色板往下发', wuColor.color === FACTION_COLORS[2]!, wuColor.color);
+check(
+  '按编号取得到颜色，指不到时给 null',
+  factionColor(wColor, wColor.factions[0]!.id) === FACTION_COLORS[0]! && factionColor(wColor, 999) === null,
+);
+wColor.factions[1]!.color = FACTION_COLORS[0]!;
+check(
+  '同色找得出来，自己不算',
+  sameColorFactions(wColor, wColor.factions[1]!.id, FACTION_COLORS[0]!).map((f) => f.name).join() ===
+    wColor.factions[0]!.name,
+  sameColorFactions(wColor, wColor.factions[1]!.id, FACTION_COLORS[0]!).map((f) => f.name).join('、'),
+);
+const wLoop = demoWorld();
+for (let i = 0; i < 11; i += 1) addFaction(wLoop, '势力 ' + String(i + 3));
+const looped = addFaction(wLoop, '第十三个');
+check(
+  '色板发完从头循环',
+  wLoop.factions.length === 14 && looped.color === FACTION_COLORS[1]!,
+  String(wLoop.factions.length) + ' 个势力，最后一个 ' + looped.color,
+);
 
 console.log('\n== 翻页与排序 ==');
 // 六张表与日志共用 `src/renderer/paging.ts` 那一层。它是纯函数，所以在这里跑；

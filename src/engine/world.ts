@@ -14,8 +14,55 @@ function nextId(list: { id: Id }[]): Id {
   return list.reduce((max, x) => Math.max(max, x.id), 0) + 1;
 }
 
+/**
+ * 内置色板：新势力按当前势力数顺次取一个，取完从头循环。十二个色相绕一圈，明度都在中段——
+ * 浅色底（#f6f7f9）与深色底（#0f1317）上同一个值都还读得出来（User 定的是「一个颜色，
+ * 浅深两套主题共用」）。旧库升级时也按编号顺次发；之后 User 想在势力表里改成什么都行。
+ */
+export const FACTION_COLORS: string[] = [
+  '#dc2626', '#ea580c', '#ca8a04', '#65a30d', '#16a34a', '#0d9488',
+  '#0891b2', '#2563eb', '#4f46e5', '#7c3aed', '#c026d3', '#e11d48',
+];
+
+/** 新势力拿哪一个颜色：按现有势力个数顺次取。 */
+export function nextFactionColor(world: World): string {
+  return FACTION_COLORS[world.factions.length % FACTION_COLORS.length]!;
+}
+
+/**
+ * 颜色那一格收什么写法：`#` 加六位十六进制，大小写都行。写别的都返回一句理由，
+ * 由界面把理由写进说明行、把字留在格子里标红，等 User 自己改（与数字格同一条规矩）。
+ */
+export function colorRefusal(text: string): string | null {
+  if (!/^#[0-9a-fA-F]{6}$/.test(text.trim())) {
+    return '颜色只收「#」加六位十六进制（例如 #dc2626），「' + text + '」写不回去';
+  }
+  return null;
+}
+
+/** 把这个颜色折成库里那一种写法（去掉两头空白、一律小写）。写对了才调它。 */
+export function normalizeColor(text: string): string {
+  return text.trim().toLowerCase();
+}
+
+/** `#rrggbb` 折成画布上用的那个数（0xrrggbb）。写法不对时返回 null，由调用方用中性色。 */
+export function colorNumber(color: string): number | null {
+  if (!/^#[0-9a-fA-F]{6}$/.test(color)) return null;
+  return Number.parseInt(color.slice(1), 16);
+}
+
+/** 某个势力的颜色；编号指不到就返回 null。 */
+export function factionColor(world: World, id: Id): string | null {
+  return world.factions.find((f) => f.id === id)?.color ?? null;
+}
+
+/** 除了这一家，还有谁也用了这个颜色。同色不挡（附庸用宗主色是常有的事），只提一句。 */
+export function sameColorFactions(world: World, id: Id, color: string): Faction[] {
+  return world.factions.filter((f) => f.id !== id && f.color === color);
+}
+
 export function addFaction(world: World, name: string): Faction {
-  const f: Faction = { id: nextId(world.factions), name };
+  const f: Faction = { id: nextId(world.factions), name, color: nextFactionColor(world) };
   world.factions.push(f);
   return f;
 }

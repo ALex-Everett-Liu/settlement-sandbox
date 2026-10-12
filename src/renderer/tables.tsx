@@ -5,7 +5,7 @@
 import { useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { Link, Order, Site, Terrain, Unit, World } from '../engine/types.ts';
-import { divisionName, linkLength, terrainLinks, terrainName } from '../engine/world.ts';
+import { colorRefusal, divisionName, factionColor, linkLength, normalizeColor, terrainLinks, terrainName } from '../engine/world.ts';
 import { factionName, garrisonText, orderText, placeText, round1, round2, siteName } from './format.ts';
 import {
   DEFAULT_SORT,
@@ -309,7 +309,54 @@ function SortTh({ text, col, bar, title }: { text: string; col: string; bar: Lis
 }
 
 /**
- * 候选列表里的一条。写回世界的是 id，名字只用来显示与过滤——
+ * 颜色那一格：手打 `#rrggbb`，右边那个方块是系统取色器（它自己也显示当前的颜色）。
+ * 写法不对就挡回来、字留在格子里标红，等 User 自己改——与数字格同一条规矩。
+ */
+function ColorCell({
+  value, label, onCommit, onNote,
+}: {
+  value: string;
+  label: string;
+  onCommit: (color: string) => void;
+  onNote: (message: string) => void;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const text = draft ?? value;
+  const bad = draft !== null && colorRefusal(draft) !== null;
+  // 库里存的一定是收下的那个写法；万一不是（手改过的库），系统取色器要一个能用的值。
+  const picker = colorRefusal(value) === null ? value : '#000000';
+
+  return (
+    <div className="row colorswatch">
+      <input
+        className={bad ? 'bad' : undefined}
+        value={text}
+        title={label + '：#加六位十六进制，例如 #dc2626'}
+        onChange={(e) => {
+          const typed = e.target.value;
+          setDraft(typed);
+          const why = colorRefusal(typed);
+          if (why === null) {
+            onCommit(normalizeColor(typed));
+            return;
+          }
+          onNote(why + '。改一个写法再写，别的不动。');
+        }}
+        onBlur={() => {
+          if (draft === null || colorRefusal(draft) === null) setDraft(null);
+        }}
+      />
+      <input
+        type="color"
+        value={picker}
+        title="取色：打开系统取色器，选完把值填进左边那一格"
+        onChange={(e) => onCommit(e.target.value)}
+      />
+    </div>
+  );
+}
+
+/** 候选列表里的一条。写回世界的是 id，名字只用来显示与过滤——
  * 名字允许重复，两处同名时按回车不写回，靠候选里跟着的编号分。
  */
 interface PickItem {
@@ -323,6 +370,8 @@ interface PickItem {
    * 两套编号各从 1 起，光看 id 分不出是哪一种。别处不传就当作据点。
    */
   kind?: 'site' | 'division';
+  /** 候选里名字前面那一小块颜色。现在只有势力有这个（它的颜色存在势力行上）。 */
+  color?: string;
 }
 
 interface NamePickerProps {
@@ -408,6 +457,9 @@ function NamePicker({ value, items, label, emptyPick, onPick }: NamePickerProps)
                 setOpen(false);
               }}
             >
+              {item.color === undefined ? null : (
+                <span className="swatch" style={{ background: item.color }} />
+              )}{' '}
               {item.name}
               {item.tag === undefined ? null : <span className="tag"> {item.tag}</span>}
             </button>
@@ -422,9 +474,9 @@ function NamePicker({ value, items, label, emptyPick, onPick }: NamePickerProps)
   );
 }
 
-/** 势力那一格的可挑条目：名字后面跟着编号，两个势力重名时靠编号分。 */
+/** 势力那一格的可挑条目：名字后面跟着编号，两个势力重名时靠编号分；每条带上它自己的颜色。 */
 function factionItems(world: World): PickItem[] {
-  return world.factions.map((f) => ({ id: f.id, name: f.name, tag: '#' + String(f.id) }));
+  return world.factions.map((f) => ({ id: f.id, name: f.name, tag: '#' + String(f.id), color: f.color }));
 }
 
 interface FactionTableProps {
@@ -433,6 +485,8 @@ interface FactionTableProps {
   bar: ListBarProps;
   /** 改名字：与别的表一样就地改，等月末那一次自动保存。 */
   onRename: (id: number, name: string) => void;
+  /** 改颜色：写法不对由 App 挡回来，值一个也不动。 */
+  onColor: (id: number, color: string) => void;
   /** 点「删除」（第二下）：名下还挂着据点或部队就会被挡回来，说明行写清楚还挂着多少。 */
   onDelete: (id: number) => void;
   /** 末尾那一行的「＋」：添一个新势力。 */
@@ -444,9 +498,11 @@ interface FactionTableProps {
  * 这些部队的兵力加总，以及这些据点自存的金钱与粮草（部队随身带着的那份不算在粮里）。
  * 表上方那一行按编号或名称排；每页几条由设置页签给。
  */
-export function FactionTable({ world, bar, onRename, onDelete, onAdd }: FactionTableProps) {
+export function FactionTable({ world, bar, onRename, onColor, onDelete, onAdd }: FactionTableProps) {
   // 六个合计由引擎算（`factionTotals`，tableRows 里调），界面与自检用同一份算法。
   const { total, rows } = pageOfRows(world, 'factions', null, bar);
+  // 颜色不在可排的数值列里（它不是数），所以那一格直接从势力行上取。
+  const colors = new Map(world.factions.map((f) => [f.id, f.color]));
 
   return (
     <>
@@ -455,6 +511,7 @@ export function FactionTable({ world, bar, onRename, onDelete, onAdd }: FactionT
       <thead>
         <tr>
           <th>名字</th>
+          <th>颜色</th>
           <SortTh text="据点" col="sites" bar={bar} />
           <SortTh text="部队" col="units" bar={bar} />
           <SortTh text="兵力" col="troops" bar={bar} />
@@ -472,7 +529,7 @@ export function FactionTable({ world, bar, onRename, onDelete, onAdd }: FactionT
       <tbody>
         {total === 0 ? (
           <tr>
-            <td className="ro" colSpan={8}>
+            <td className="ro" colSpan={9}>
               还没有势力。按下面那一行的「＋」新建一个。
             </td>
           </tr>
@@ -481,6 +538,14 @@ export function FactionTable({ world, bar, onRename, onDelete, onAdd }: FactionT
             <tr key={r.id}>
               <td>
                 <input value={r.name} onChange={(e) => onRename(r.id, e.target.value)} />
+              </td>
+              <td>
+                <ColorCell
+                  value={colors.get(r.id) ?? '#000000'}
+                  label="颜色"
+                  onCommit={(color) => onColor(r.id, color)}
+                  onNote={bar.onNote}
+                />
               </td>
               <td className="ro">{rowNumber(r, 'sites')}</td>
               <td className="ro">{rowNumber(r, 'units')}</td>
@@ -497,7 +562,7 @@ export function FactionTable({ world, bar, onRename, onDelete, onAdd }: FactionT
       </tbody>
       <tfoot>
         <tr>
-          <td colSpan={8}>
+          <td colSpan={9}>
             <button onClick={onAdd}>＋ 新增势力</button>
           </td>
         </tr>
@@ -693,12 +758,19 @@ export function SiteTable({
               />
             </td>
             <td>
-              <NamePicker
-                value={factionName(world, s.faction)}
-                items={factionItems(world)}
-                label="势力"
-                onPick={(item) => onEdit(s.id, { faction: item.id })}
-              />
+              <div className="pickerswatch">
+                <span
+                  className="swatch"
+                  style={{ background: factionColor(world, s.faction) ?? 'transparent' }}
+                  title="这个势力在地图上的颜色"
+                />
+                <NamePicker
+                  value={factionName(world, s.faction)}
+                  items={factionItems(world)}
+                  label="势力"
+                  onPick={(item) => onEdit(s.id, { faction: item.id })}
+                />
+              </div>
             </td>
             <td>
               <div className="row">
@@ -955,12 +1027,19 @@ export function UnitTable({ world, bar, onEdit, onOrder, onPickDestination, pick
               <input value={u.name} onChange={(e) => onEdit(u.id, { name: e.target.value })} />
             </td>
             <td>
-              <NamePicker
-                value={factionName(world, u.faction)}
-                items={factionItems(world)}
-                label="势力"
-                onPick={(item) => onEdit(u.id, { faction: item.id })}
-              />
+              <div className="pickerswatch">
+                <span
+                  className="swatch"
+                  style={{ background: factionColor(world, u.faction) ?? 'transparent' }}
+                  title="这个势力在地图上的颜色"
+                />
+                <NamePicker
+                  value={factionName(world, u.faction)}
+                  items={factionItems(world)}
+                  label="势力"
+                  onPick={(item) => onEdit(u.id, { faction: item.id })}
+                />
+              </div>
             </td>
             <td>
               <input

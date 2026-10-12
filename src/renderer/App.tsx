@@ -9,6 +9,7 @@ import {
   addLink,
   addSite,
   addTerrain,
+  colorRefusal,
   demoWorld,
   divisionName,
   divisionRankRefusal,
@@ -16,8 +17,10 @@ import {
   divisionWouldCycle,
   levelRefusal,
   linkName,
+  normalizeColor,
   parentLevelRefusal,
   parentWouldCycle,
+  sameColorFactions,
   seatRefusal,
   siteDivisionNote,
   siteName,
@@ -568,13 +571,46 @@ export function App() {
     [commit],
   );
 
+  /**
+   * 势力表里改颜色：只收 `#rrggbb`（由引擎的 colorRefusal 判），写不回去就报一句、值一个也不动。
+   * 同色不挡——附庸用宗主色、同阵营用一套色都是常有的事——写回后在说明行里把同名的那几家念出来。
+   */
+  const editFactionColor = useCallback(
+    (id: number, color: string) => {
+      const w = worldRef.current;
+      if (!w) return;
+      const f = w.factions.find((x) => x.id === id);
+      if (!f) return;
+      const why = colorRefusal(color);
+      if (why !== null) {
+        setNote(why);
+        return;
+      }
+      f.color = normalizeColor(color);
+      commit(w);
+      const twins = sameColorFactions(w, id, f.color);
+      setNote(
+        twins.length === 0
+          ? '「' + f.name + '」的颜色改成 ' + f.color
+          : '「' + f.name + '」的颜色改成 ' + f.color + '，与 ' +
+            twins.map((t) => '「' + t.name + '」').join('、') + ' 相同——不挡，只提一句',
+      );
+    },
+    [commit],
+  );
+
   /** 势力表末尾那个「＋」：添一行，名字先给个编号，编号只往前走（不回收删掉的号）。 */
   const addFactionRow = useCallback(() => {
     const w = worldRef.current;
     if (!w) return;
     const f = addFaction(w, '新势力 ' + String(w.factions.length + 1));
     commit(w);
-    setNote(addedNote('新增势力：' + f.name + '（#' + String(f.id) + '）', jumpToRow('factions', f.id)));
+    setNote(
+      addedNote(
+        '新增势力：' + f.name + '（#' + String(f.id) + '），颜色 ' + f.color,
+        jumpToRow('factions', f.id),
+      ),
+    );
     if (api) void api.saveWorld(w);
   }, [commit, jumpToRow]);
 
@@ -1070,6 +1106,7 @@ export function App() {
                 world={world}
                 bar={bar('factions')}
                 onRename={renameFaction}
+                onColor={editFactionColor}
                 onDelete={deleteFaction}
                 onAdd={addFactionRow}
               />

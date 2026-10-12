@@ -4,9 +4,9 @@
 import { Application, Container, Graphics, Text } from 'pixi.js';
 import { useEffect, useRef, useState } from 'react';
 import { mulberry32 } from '../engine/rng.ts';
-import type { Params, Site, Theme, Unit, World } from '../engine/types.ts';
-import { siteGarrison, unitPoint } from '../engine/world.ts';
-import { garrisonText, placeText, round1, round2 } from './format.ts';
+import type { Id, Params, Site, Theme, Unit, World } from '../engine/types.ts';
+import { colorNumber, factionColor, siteGarrison, unitPoint } from '../engine/world.ts';
+import { factionName, garrisonText, placeText, round1, round2 } from './format.ts';
 
 /** 生成地形用的固定种子：同一份参数每次生成出同一张图。 */
 const TERRAIN_SEED = 20261011;
@@ -80,6 +80,15 @@ interface Scene {
 /** 线宽按屏幕像素折算成世界单位，缩放多大看起来都一样粗。 */
 function px(scene: Scene, screenPx: number): number {
   return screenPx / scene.zoom;
+}
+
+/**
+ * 某个势力在画布上的颜色。势力没有颜色、编号指不到、或者库里那个写法读不出来时给 null，
+ * 由调用方退回各自的默认色（据点用成色、部队用蓝色、连线用灰色）——地图不许因为一个坏值就画不出来。
+ */
+function factionColorNumber(world: World, id: Id): number | null {
+  const text = factionColor(world, id);
+  return text === null ? null : colorNumber(text);
 }
 
 /**
@@ -238,22 +247,38 @@ function drawTerrain(scene: Scene, params: Params): void {
   grid.stroke({ color: palette.grid, width: px(scene, 1) });
 }
 
+/**
+ * 连线。颜色按两端势力分：两端同属一家就画那一家的颜色，异色（或哪一端没有颜色）仍画中性灰——
+ * 一眼看出哪几条是自己境内的路。同色的线并成一次描边，不是一条一次。
+ */
 function drawLinks(scene: Scene, world: World): void {
   const { links, palette } = scene;
   links.clear();
+  const byColor = new Map<number, number[]>();
   for (const l of world.links) {
     const a = world.sites.find((s) => s.id === l.a);
     const b = world.sites.find((s) => s.id === l.b);
     if (!a || !b) continue;
-    links.moveTo(a.x, a.y).lineTo(b.x, b.y);
+    const ca = factionColorNumber(world, a.faction);
+    const cb = factionColorNumber(world, b.faction);
+    const color = ca !== null && ca === cb ? ca : palette.link;
+    const list = byColor.get(color) ?? [];
+    list.push(a.x, a.y, b.x, b.y);
+    byColor.set(color, list);
   }
-  links.stroke({ color: palette.link, width: px(scene, 1.6), alpha: 0.85 });
+  for (const [color, segs] of byColor) {
+    for (let i = 0; i < segs.length; i += 4) {
+      links.moveTo(segs[i]!, segs[i + 1]!).lineTo(segs[i + 2]!, segs[i + 3]!);
+    }
+    links.stroke({ color, width: px(scene, 1.6), alpha: color === palette.link ? 0.85 : 0.9 });
+  }
 }
 
 /**
  * 据点记号的样子按层级分档（地图册上那套）：最底层是实心小圆圈，往上是实心小正方形、
  * 两圈、两个小正方形套、两圈加一个心点；再往上都用最高的那一档。
  * 「两圈」是填一个页面底色的小一号形状挖出来的——画布是透明的，圈里露出来的就是底图。
+ * 形状管层级、大小管发展度，颜色管归属：有势力的据点用它那一家的颜色画，没有的用默认色。
  */
 function drawSiteMark(g: Graphics, r: number, level: number, palette: Palette, color = palette.site): void {
   const square = level === 1 || level === 3;
@@ -299,11 +324,11 @@ function syncSites(scene: Scene, world: World): void {
     g.clear();
     const r = siteRadius(s);
     const level = s.level;
-    // 高亮：把同一个记号放大一圈、用一种颜色先画一遍，什么形状都适用。
-    // 「正在挑」那一圈优先；治所是常驻的，用另一种颜色。
+    // 记号本体按所属势力的颜色画；「正在挑」那一圈优先，治所那一圈是常驻的，两种都用各自的状态色
+    // （它们是状态，不是归属，所以不跟势力颜色走）。
     if (s.id === scene.start) drawSiteMark(g, r + 3.5, level, palette, palette.siteStart);
     else if (seats.has(s.id)) drawSiteMark(g, r + 3.5, level, palette, palette.seat);
-    drawSiteMark(g, r, level, palette);
+    drawSiteMark(g, r, level, palette, factionColorNumber(world, s.faction) ?? palette.site);
     g.position.set(s.x, s.y);
     const label = siteLabel.get(s.id);
     if (label) {
@@ -324,9 +349,10 @@ function syncSites(scene: Scene, world: World): void {
 
 /**
  * 部队记号的样子：外面套一圈就是「正在挑它作目的地」。两笔都是填充，宽度不随缩放变。
+ * 里面的菱形按所属势力的颜色画（部队归势力管），取不到就退回默认蓝。
  * 驻军没有记号可画（见 syncUnits），所以正在挑一支部队时，高亮落在它所在据点那一圈上。
  */
-function drawUnitMarker(scene: Scene, u: Unit): void {
+function drawUnitMarker(scene: Scene, world: World, u: Unit): void {
   const g = scene.unitGfx.get(u.id);
   if (!g) return;
   const r = 6;
@@ -334,7 +360,8 @@ function drawUnitMarker(scene: Scene, u: Unit): void {
   if (u.id === scene.pickUnit) {
     g.poly([0, -(r + 3.5), r + 3.5, 0, 0, r + 3.5, -(r + 3.5), 0], true).fill({ color: scene.palette.siteStart });
   }
-  g.poly([0, -r, r, 0, 0, r, -r, 0], true).fill({ color: scene.palette.unit });
+  g.poly([0, -r, r, 0, 0, r, -r, 0], true)
+    .fill({ color: factionColorNumber(world, u.faction) ?? scene.palette.unit });
 }
 
 /**
@@ -359,7 +386,7 @@ function syncUnits(scene: Scene, world: World): void {
       units.addChild(g);
       unitGfx.set(u.id, g);
       unitGfxToUnit.set(g, u.id);
-      drawUnitMarker(scene, u);
+      drawUnitMarker(scene, world, u);
     }
     const p = unitPoint(world, u);
     if (p) g.position.set(p.x, p.y);
@@ -739,15 +766,19 @@ export function MapView({
     redraw(scene, worldRef.current, params);
   }, [theme, params]);
 
-  // 据点那一层画的是坐标、记号的档（层级）、大小（发展度）、治所那一圈与所属据点那一圈，
-  // 所以这些东西任何一个变了都要重建：它们（连同各辖区的治所）全都进这个键。
+  // 据点那一层画的是坐标、记号的档（层级）、大小（发展度）、颜色（所属势力）、治所那一圈与
+  // 所属据点那一圈，所以这些东西任何一个变了都要重建：它们（连同各辖区的治所与各势力的颜色）
+  // 全都进这个键。连线的颜色看两端势力，所以那两个键都要带上势力颜色。
+  const factionKey = world.factions.map((f) => f.id + '=' + f.color).join(',');
   const siteKey =
     world.sites
-      .map((s) => [s.id, s.x, s.y, s.level, s.development, s.parent ?? 0].join(':'))
+      .map((s) => [s.id, s.x, s.y, s.level, s.development, s.parent ?? 0, s.faction].join(':'))
       .join('|') +
     '|seat:' +
-    world.divisions.map((d) => d.seat ?? 0).join(',');
-  const linkKey = world.links.map((l) => l.id + ':' + l.a + '-' + l.b).join('|');
+    world.divisions.map((d) => d.seat ?? 0).join(',') +
+    '|fac:' +
+    factionKey;
+  const linkKey = world.links.map((l) => l.id + ':' + l.a + '-' + l.b).join('|') + '|fac:' + factionKey;
   useEffect(() => {
     const scene = sceneRef.current;
     if (!scene) return;
@@ -792,7 +823,7 @@ export function MapView({
     for (const id of [before, pickUnit]) {
       if (id === null) continue;
       const u = worldRef.current.units.find((x) => x.id === id);
-      if (u) drawUnitMarker(scene, u);
+      if (u) drawUnitMarker(scene, worldRef.current, u);
     }
   }, [startSite, pickUnit]);
 
@@ -839,6 +870,13 @@ export function MapView({
             <>
               <strong>{hover.site.name}</strong>
               <div>
+                <span
+                  className="swatch"
+                  style={{ background: factionColor(world, hover.site.faction) ?? 'transparent' }}
+                />{' '}
+                {factionName(world, hover.site.faction)}
+              </div>
+              <div>
                 发展度 {round1(hover.site.development)} · 防御 {round1(hover.site.fortification)} 级
               </div>
               <div>
@@ -864,6 +902,13 @@ export function MapView({
           ) : (
             <>
               <strong>{hover.unit.name}</strong>
+              <div>
+                <span
+                  className="swatch"
+                  style={{ background: factionColor(world, hover.unit.faction) ?? 'transparent' }}
+                />{' '}
+                {factionName(world, hover.unit.faction)}
+              </div>
               <div>
                 兵力 {hover.unit.troops} · 训练度 {Math.round(hover.unit.training)}
               </div>

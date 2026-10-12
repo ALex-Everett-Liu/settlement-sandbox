@@ -17,13 +17,13 @@ import type {
   Unit,
   World,
 } from '../engine/types.ts';
-import { emptyWorld, levelsFromParents } from '../engine/world.ts';
+import { emptyWorld, FACTION_COLORS, levelsFromParents } from '../engine/world.ts';
 
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS factions (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS factions (id INTEGER PRIMARY KEY, name TEXT NOT NULL, color TEXT NOT NULL DEFAULT '#dc2626');
 CREATE TABLE IF NOT EXISTS divisions (
   id INTEGER PRIMARY KEY, name TEXT NOT NULL, rank INTEGER NOT NULL,
   parent INTEGER, seat INTEGER
@@ -177,6 +177,16 @@ function migrate(db: DatabaseSync, dbPath: string, from: number): void {
         steps.push('links.terrain 由名字改成地貌编号');
       }
     }
+    if (from < 9) {
+      // 势力多一个颜色：先按内置色板给现有的按编号顺次发一个，之后由 User 在势力表里自己改。
+      if (!hasColumn(db, 'factions', 'color')) {
+        db.exec("ALTER TABLE factions ADD COLUMN color TEXT NOT NULL DEFAULT '#dc2626'");
+        const rows = db.prepare('SELECT id FROM factions ORDER BY id').all() as Array<{ id: number }>;
+        const setColor = db.prepare('UPDATE factions SET color = ? WHERE id = ?');
+        rows.forEach((r, i) => setColor.run(FACTION_COLORS[i % FACTION_COLORS.length]!, Number(r.id)));
+        steps.push('factions 加 color，按编号从内置色板发一个（' + String(rows.length) + ' 个势力）');
+      }
+    }
     if (from < 7) {
       // 规模拆成两个数：发展度（原来那个规模折算成 0–100）与防御设施等级（从 0 起，
       // 旧数据没有这一项）。SQLite 改不了现成列的名字与类型，按老办法把这张表重建一次。
@@ -312,8 +322,8 @@ export function saveWorld(db: DatabaseSync, world: World): void {
     db.exec('DELETE FROM terrains');
     db.exec('DELETE FROM units');
 
-    const insFaction = db.prepare('INSERT INTO factions (id, name) VALUES (?, ?)');
-    for (const f of world.factions) insFaction.run(f.id, f.name);
+    const insFaction = db.prepare('INSERT INTO factions (id, name, color) VALUES (?, ?, ?)');
+    for (const f of world.factions) insFaction.run(f.id, f.name, f.color);
 
     const insDivision = db.prepare('INSERT INTO divisions (id, name, rank, parent, seat) VALUES (?, ?, ?, ?, ?)');
     for (const d of world.divisions) insDivision.run(d.id, d.name, d.rank, d.parent, d.seat);
@@ -381,7 +391,11 @@ export function loadWorld(db: DatabaseSync): World {
   w.pending = pendingRaw ? (JSON.parse(pendingRaw) as Ask | null) : null;
 
   for (const r of db.prepare('SELECT * FROM factions ORDER BY id').all() as Array<Record<string, unknown>>) {
-    w.factions.push({ id: Number(r['id']), name: String(r['name']) } satisfies Faction);
+    w.factions.push({
+      id: Number(r['id']),
+      name: String(r['name']),
+      color: String(r['color'] ?? FACTION_COLORS[0]),
+    } satisfies Faction);
   }
   for (const r of db.prepare('SELECT * FROM divisions ORDER BY id').all() as Array<Record<string, unknown>>) {
     w.divisions.push({
