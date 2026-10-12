@@ -22,6 +22,10 @@ interface Palette {
   link: number;
   site: number;
   siteStart: number;
+  /** 治所那一圈的颜色，与「正在挑」那一圈分开。 */
+  seat: number;
+  /** 页面底色：「两圈」那一档靠它挖出中间那一圈。 */
+  markBg: number;
   label: number;
   unit: number;
 }
@@ -29,11 +33,13 @@ interface Palette {
 const PALETTES: Record<Theme, Palette> = {
   light: {
     grid: 0xe2e6eb, border: 0xc4cad3, sea: 0xd3e5f3, river: 0x9ec6e6, hill: 0xd9d3c7,
-    link: 0x8d949d, site: 0x8a5a12, siteStart: 0xd9480f, label: 0x1b2027, unit: 0x1f6feb,
+    link: 0x8d949d, site: 0x8a5a12, siteStart: 0xd9480f, seat: 0x1d7a6c, markBg: 0xf6f7f9,
+    label: 0x1b2027, unit: 0x1f6feb,
   },
   dark: {
     grid: 0x1c2734, border: 0x2c3a4a, sea: 0x14303f, river: 0x2a5468, hill: 0x2a2f36,
-    link: 0x5f6d7b, site: 0xe8c07a, siteStart: 0xff8c42, label: 0xd6e2ee, unit: 0x63a4ff,
+    link: 0x5f6d7b, site: 0xe8c07a, siteStart: 0xff8c42, seat: 0x4fd1c5, markBg: 0x0f1317,
+    label: 0xd6e2ee, unit: 0x63a4ff,
   },
 };
 
@@ -237,10 +243,33 @@ function drawLinks(scene: Scene, world: World): void {
   links.stroke({ color: palette.link, width: px(scene, 1.6), alpha: 0.85 });
 }
 
-/** 据点与它的名字。只在据点集合或坐标变了时调用。 */
+/**
+ * 据点记号的样子按层级分档（地图册上那套）：最底层是实心小圆圈，往上是实心小正方形、
+ * 两圈、两个小正方形套、两圈加一个心点；再往上都用最高的那一档。
+ * 「两圈」是填一个页面底色的小一号形状挖出来的——画布是透明的，圈里露出来的就是底图。
+ */
+function drawSiteMark(g: Graphics, r: number, level: number, palette: Palette, color = palette.site): void {
+  const square = level === 1 || level === 3;
+  const ring = level >= 2;
+  const dot = level >= 4;
+  const shape = (radius: number, fill: number) => {
+    if (square) g.rect(-radius, -radius, radius * 2, radius * 2).fill({ color: fill });
+    else g.circle(0, 0, radius).fill({ color: fill });
+  };
+  shape(r, color);
+  if (ring) {
+    shape(r * (dot ? 0.62 : 0.5), palette.markBg);
+    if (dot) shape(r * 0.24, color);
+  }
+}
+
+/** 据点与它的名字。只在据点集合、坐标或上级变了时调用。 */
 function syncSites(scene: Scene, world: World): void {
   const { sites, siteGfx, siteLabel, gfxToSite, palette } = scene;
   const seen = new Set<number>();
+  // 治所：辖区当下借用的那个据点。另套一圈，颜色与「正在挑」那一圈分开。
+  const seats = new Set<number>();
+  for (const d of world.divisions) if (d.seat !== null) seats.add(d.seat);
 
   for (const s of world.sites) {
     seen.add(s.id);
@@ -261,10 +290,13 @@ function syncSites(scene: Scene, world: World): void {
       siteLabel.set(s.id, label);
     }
     g.clear();
-    // 起点那个据点外面套一圈。两笔都是填充，宽度就是屏幕上固定的几像素，不随缩放变。
     const r = siteRadius(s);
-    if (s.id === scene.start) g.circle(0, 0, r + 3.5).fill({ color: palette.siteStart });
-    g.circle(0, 0, r).fill({ color: palette.site });
+    const level = s.level;
+    // 高亮：把同一个记号放大一圈、用一种颜色先画一遍，什么形状都适用。
+    // 「正在挑」那一圈优先；治所是常驻的，用另一种颜色。
+    if (s.id === scene.start) drawSiteMark(g, r + 3.5, level, palette, palette.siteStart);
+    else if (seats.has(s.id)) drawSiteMark(g, r + 3.5, level, palette, palette.seat);
+    drawSiteMark(g, r, level, palette);
     g.position.set(s.x, s.y);
     const label = siteLabel.get(s.id);
     if (label) {
@@ -353,7 +385,7 @@ function redraw(scene: Scene, world: World, params: Params): void {
 
 /** 悬停浮层的内容：指到据点就显示据点，指到部队记号就显示那支部队。x／y 是浮层左上角。 */
 type Hover =
-  | { kind: 'site'; site: Site; x: number; y: number }
+  | { kind: 'site'; site: Site; level: number; x: number; y: number }
   | { kind: 'unit'; unit: Unit; x: number; y: number };
 
 /** 部队记号在世界里的位置：停在据点里就贴在那个据点边上，在路上按行军进度插值。 */
@@ -372,7 +404,7 @@ export interface MapViewProps {
   world: World;
   params: Params;
   theme: Theme;
-  /** 正在挑的起点据点；没有就是 null。 */
+  /** 要在图上套一圈的那个据点：建连接的起点，或正在挑上级的那一座；没有就是 null。 */
   startSite: number | null;
   /** 正在挑目的地的那支部队；没有就是 null。 */
   pickUnit: number | null;
@@ -649,8 +681,10 @@ export function MapView({
           const id = scene.gfxToSite.get(e.target as Graphics);
           if (id === undefined) return;
           armHover(() => {
-            const s = worldRef.current.sites.find((x) => x.id === id);
-            return s ? { kind: 'site', site: s, x: overlayX(s.x), y: overlayY(s.y) } : null;
+            const w = worldRef.current;
+            const s = w.sites.find((x) => x.id === id);
+            if (!s) return null;
+            return { kind: 'site', site: s, level: s.level, x: overlayX(s.x), y: overlayY(s.y) };
           });
         });
         scene.sites.on('pointerout', dropHover);
@@ -691,7 +725,7 @@ export function MapView({
   }, [theme, params]);
 
   // 据点或连线的几何变了（新增、删掉、改坐标、改规模）：重建据点那一层。
-  const siteKey = world.sites.map((s) => s.id + ':' + s.x + ',' + s.y + ',' + s.scale).join('|');
+  const siteKey = world.sites.map((s) => s.id + ':' + s.x + ',' + s.y + ',' + s.scale + ',' + String(s.parent ?? 0)).join('|');
   const linkKey = world.links.map((l) => l.id + ':' + l.a + '-' + l.b).join('|');
   useEffect(() => {
     const scene = sceneRef.current;
@@ -784,7 +818,14 @@ export function MapView({
             <>
               <strong>{hover.site.name}</strong>
               <div>
-                规模 {hover.site.scale} · 人口 {hover.site.population}
+                规模 {hover.site.scale} · 人口 {hover.site.population} · 第 {hover.level} 层
+              </div>
+              <div>
+                辖区{' '}
+                {hover.site.division === null
+                  ? '（无）'
+                  : (world.divisions.find((x) => x.id === hover.site.division)?.name ??
+                    '辖区 ' + String(hover.site.division))}
               </div>
               <div>
                 民心 {Math.round(hover.site.morale)} · 稳定 {Math.round(hover.site.stability)}

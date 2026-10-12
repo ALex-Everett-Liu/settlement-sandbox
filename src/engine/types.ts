@@ -42,6 +42,21 @@ export interface Faction {
   name: string;
 }
 
+/**
+ * 辖区：一片地方的行政归属（州、郡这一类），不是一个地点。
+ * 名字与等级由 User 声明；治所只是它当下借用的那个据点，随时可迁移。
+ */
+export interface Division {
+  id: Id;
+  name: string;
+  /** 等级：0 起，越大越高。上级辖区的等级不低于下级的等级。 */
+  rank: number;
+  /** 上级辖区，可以没有。 */
+  parent: Id | null;
+  /** 治所：一个据点，必须落在自己的整棵子树里；可以没有。 */
+  seat: Id | null;
+}
+
 export interface Site {
   id: Id;
   name: string;
@@ -59,6 +74,13 @@ export interface Site {
   food: number;
   /** 上级据点，随时可改。 */
   parent: Id | null;
+  /**
+   * 层级：User 声明的等级，0 起，越大越高，记号形状按它分档。
+   * 系统只守一条：上级的层级不低于下级的层级——差多少不管，平级也能挂。
+   */
+  level: number;
+  /** 行政归属：挂在哪个辖区下面；可以没有。 */
+  division: Id | null;
   faction: Id;
 }
 
@@ -93,6 +115,8 @@ export interface World {
   /** 已经过去的天数。第 1 天从 1 开始。 */
   day: number;
   factions: Faction[];
+  /** 行政区划：一片地方的行政归属，与据点各记各的。 */
+  divisions: Division[];
   sites: Site[];
   units: Unit[];
   links: Link[];

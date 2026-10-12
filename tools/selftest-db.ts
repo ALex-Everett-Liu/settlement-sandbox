@@ -107,7 +107,7 @@ console.log('\n== 参数表与版本 ==');
 saveParams(db, p);
 check('参数往返一致', canon(loadParams(db)) === canon(p));
 const ver = db.prepare('SELECT v FROM meta WHERE k = ?').get('schema_version') as { v: string };
-check('schema 版本记下来了', Number(ver.v) === 3, ver.v);
+check('schema 版本记下来了', Number(ver.v) === 5, ver.v);
 
 console.log('\n== 旧库缺字段 ==');
 // 造一份加 theme 之前写下的 params：把它按旧格式塞回 meta 表。
@@ -139,7 +139,7 @@ old.close();
 
 const up = openWorldDb(legacyPath);
 const ver2 = up.prepare('SELECT v FROM meta WHERE k = ?').get('schema_version') as { v: string };
-check('版本升到 3', Number(ver2.v) === 3, ver2.v);
+check('版本升到 5', Number(ver2.v) === 5, ver2.v);
 const kept = up.prepare('SELECT detour, terrain FROM links WHERE id = 1').get() as {
   detour: number;
   terrain: string | null;
@@ -157,10 +157,50 @@ const cols = (up.prepare("SELECT name FROM pragma_table_info('units')").all() as
   (r) => r.name,
 );
 check('units 有 food_policy 列', cols.includes('food_policy'), cols.length + ' 列');
+const siteCols = (up.prepare("SELECT name FROM pragma_table_info('sites')").all() as Array<{ name: string }>).map(
+  (r) => r.name,
+);
+check('sites 有 level 列', siteCols.includes('level'), siteCols.join('、'));
 check('升级前留了副本', fs.existsSync(path.join(dir, 'legacy-v1.v1-backup.db')));
 const keptDay = up.prepare('SELECT v FROM meta WHERE k = ?').get('day') as { v: string };
 check('day 没被动过', Number(keptDay.v) === 7, keptDay.v);
 up.close();
+
+console.log('\n== v3 升 v5：层级初值与辖区表 ==');
+// 造一份 v3 形状的库：sites 没有 level 列，B 挂在 A 下面（A 应当拿第 1 层、B 拿第 0 层）。
+const v3Path = path.join(dir, 'legacy-v3.db');
+const v3 = new DatabaseSync(v3Path);
+v3.exec(`
+CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+CREATE TABLE sites (
+  id INTEGER PRIMARY KEY, name TEXT NOT NULL, x REAL NOT NULL, y REAL NOT NULL,
+  scale INTEGER NOT NULL, population INTEGER NOT NULL, morale REAL NOT NULL,
+  stability REAL NOT NULL, money REAL NOT NULL, food REAL NOT NULL,
+  parent INTEGER, faction INTEGER NOT NULL
+);
+`);
+v3.prepare('INSERT INTO meta (k, v) VALUES (?, ?)').run('schema_version', '3');
+const insV3 = v3.prepare(
+  'INSERT INTO sites (id, name, x, y, scale, population, morale, stability, money, food, parent, faction)' +
+    ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+);
+insV3.run(1, 'A 城', 0, 0, 1, 0, 70, 60, 0, 0, null, 1);
+insV3.run(2, 'B 城', 0, 0, 1, 0, 70, 60, 0, 0, 1, 1);
+v3.close();
+
+const up3 = openWorldDb(v3Path);
+const ver3 = up3.prepare('SELECT v FROM meta WHERE k = ?').get('schema_version') as { v: string };
+check('v3 的库升到 5', Number(ver3.v) === 5, ver3.v);
+const lv = up3.prepare('SELECT id, level FROM sites ORDER BY id').all() as Array<{ id: number; level: number }>;
+check('升级时按上下级算出层级初值', Number(lv[0]?.level) === 1 && Number(lv[1]?.level) === 0, JSON.stringify(lv));
+const divTable = up3
+  .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'divisions'")
+  .get() as { name: string } | undefined;
+check('有了 divisions 表', divTable !== undefined, String(divTable?.name));
+const divCount = up3.prepare('SELECT COUNT(*) AS n FROM divisions').get() as { n: number };
+check('辖区是空的，等 User 自己建', Number(divCount.n) === 0, String(divCount.n));
+check('升级前留了 v3 的副本', fs.existsSync(path.join(dir, 'legacy-v3.v3-backup.db')));
+up3.close();
 
 console.log('\n== 空世界也算有世界 ==');
 // 判据不能是「有没有据点」：那样把世界清空之后，下次开就被最小世界盖掉了。

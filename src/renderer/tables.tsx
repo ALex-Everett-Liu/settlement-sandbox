@@ -3,7 +3,7 @@
 // queue, the five totals on a faction row) stay read-only text.
 import { useRef, useState } from 'react';
 import type { Link, Order, Site, Terrain, Unit, World } from '../engine/types.ts';
-import { linkLength } from '../engine/world.ts';
+import { divisionName, divisionSites, linkLength, siteBranch } from '../engine/world.ts';
 import { factionName, orderText, placeText, round2, siteName, TERRAIN_LABEL, TERRAINS } from './format.ts';
 
 function toNumber(text: string, fallback: number): number {
@@ -57,6 +57,11 @@ interface PickItem {
   name: string;
   /** 候选里跟在名字后面的编号（「#5」这种）；「（无）」这一类没有编号，就不写。 */
   tag?: string;
+  /**
+   * 这一条是据点还是辖区。只有据点表那个「只看某一支」用得上——
+   * 两套编号各从 1 起，光看 id 分不出是哪一种。别处不传就当作据点。
+   */
+  kind?: 'site' | 'division';
 }
 
 interface NamePickerProps {
@@ -245,17 +250,83 @@ interface SiteTableProps {
   startSite: number | null;
   /** 点「以此为起点」：接着在地图上挑终点，见设计 §六。 */
   onPick: (id: number) => void;
+  /** 正在给它挑上级的那个据点；没有就是 null。 */
+  pickingParent: number | null;
+  /** 点「挂到…」：接着在地图上点一个据点作上级。 */
+  onPickParent: (id: number) => void;
   /** 点「定位」：地图页签把这一座移到画面中央。 */
   onLocate: (id: number) => void;
   /** 点「删除」（第二下）：有部队停着、有连接挂着、有据点认它当上级、有部队正朝它去，都会被挡回来。 */
   onDelete: (id: number) => void;
+  /** 只看某一支时挑中的那一个（据点或辖区）；null 就是全部。 */
+  only: { kind: 'site' | 'division'; id: number; name: string } | null;
+  /** 挑了一个（据点或辖区），或者挑「全部」时传 null。 */
+  onOnly: (item: { kind: 'site' | 'division'; id: number; name: string } | null) => void;
+  /** 改层级：破了「上级不低于下级」就由 App 挡回来。 */
+  onEditLevel: (id: number, level: number) => void;
+  /** 挑辖区：名字类，过滤输入框；与据点自己那个层级对不上时只在说明行提一句。 */
+  onEditDivision: (id: number, division: number | null) => void;
 }
 
-export function SiteTable({ world, onEdit, startSite, onPick, onLocate, onDelete }: SiteTableProps) {
+export function SiteTable({
+  world,
+  onEdit,
+  startSite,
+  onPick,
+  pickingParent,
+  onPickParent,
+  onLocate,
+  onDelete,
+  only,
+  onOnly,
+  onEditLevel,
+  onEditDivision,
+}: SiteTableProps) {
   if (world.sites.length === 0) return <p className="dim">还没有据点。</p>;
 
+  // 「只看某一支」：挑据点就收它那一棵（所属据点往下），挑辖区就收它名下那一整片；选「全部」时是 null。
+  const branch =
+    only === null ? null : only.kind === 'division' ? divisionSites(world, only.id) : siteBranch(world, only.id);
+  const rows = branch === null ? world.sites : world.sites.filter((s) => branch.has(s.id));
+
   return (
-    <table>
+    <>
+      <div className="row">
+        <NamePicker
+          value={only === null ? '' : only.name}
+          items={[
+            { id: 0, name: '全部' },
+            ...world.sites.map((s) => ({ id: s.id, name: s.name, tag: '#' + String(s.id), kind: 'site' as const })),
+            ...world.divisions.map((d) => ({
+              id: d.id,
+              name: d.name,
+              tag: '#' + String(d.id) + '（辖区）',
+              kind: 'division' as const,
+            })),
+          ]}
+          label="只看某一支"
+          emptyPick={{ id: 0, name: '全部' }}
+          onPick={(item) => {
+            if (item.id === 0) {
+              onOnly(null);
+              return;
+            }
+            onOnly({ kind: item.kind === 'division' ? 'division' : 'site', id: item.id, name: item.name });
+          }}
+        />
+        <span className="dim small">
+          {only === null
+            ? '全部 ' + String(world.sites.length) + ' 座'
+            : '只看' +
+              (only.kind === 'division' ? '辖区' : '') +
+              '「' +
+              only.name +
+              '」：' +
+              String(rows.length) +
+              ' 座'}
+        </span>
+      </div>
+      <table>
       <thead>
         <tr>
           <th>名称</th>
@@ -266,14 +337,16 @@ export function SiteTable({ world, onEdit, startSite, onPick, onLocate, onDelete
           <th>金钱</th>
           <th>粮草</th>
           <th>势力</th>
-          <th>上级</th>
+          <th>所属据点</th>
+          <th>层级</th>
+          <th>辖区</th>
           <th>坐标 x</th>
           <th>坐标 y</th>
           <th>地图</th>
         </tr>
       </thead>
       <tbody>
-        {world.sites.map((s) => (
+        {rows.map((s) => (
           <tr key={s.id}>
             <td>
               <input value={s.name} onChange={(e) => onEdit(s.id, { name: e.target.value })} />
@@ -331,17 +404,35 @@ export function SiteTable({ world, onEdit, startSite, onPick, onLocate, onDelete
               />
             </td>
             <td>
+              <div className="row">
+                <span className={s.parent === null ? 'dim' : undefined}>
+                  {s.parent === null ? '（无）' : siteName(world, s.parent)}
+                </span>
+                <button onClick={() => onPickParent(s.id)}>挂到…</button>
+                {s.parent === null ? null : <button onClick={() => onEdit(s.id, { parent: null })}>摘掉</button>}
+              </div>
+              {pickingParent === s.id ? (
+                <div className="dim small">在地图上点一个据点作上级（Esc 或点空白处取消）</div>
+              ) : null}
+            </td>
+            <td>
+              <input
+                type="number"
+                title="层级：上级不低于它、下级不高于它；记号形状按它分档"
+                value={s.level}
+                onChange={(e) => onEditLevel(s.id, toNumber(e.target.value, s.level))}
+              />
+            </td>
+            <td>
               <NamePicker
-                value={s.parent === null ? NO_PARENT : siteName(world, s.parent)}
+                value={s.division === null ? '（无）' : divisionName(world, s.division)}
                 items={[
-                  { id: 0, name: NO_PARENT },
-                  ...world.sites
-                    .filter((x) => x.id !== s.id)
-                    .map((x) => ({ id: x.id, name: x.name, tag: '#' + String(x.id) })),
+                  { id: 0, name: '（无）' },
+                  ...world.divisions.map((d) => ({ id: d.id, name: d.name, tag: '#' + String(d.id) })),
                 ]}
-                label="上级"
-                emptyPick={{ id: 0, name: NO_PARENT }}
-                onPick={(item) => onEdit(s.id, { parent: item.id === 0 ? null : item.id })}
+                label="辖区"
+                emptyPick={{ id: 0, name: '（无）' }}
+                onPick={(item) => onEditDivision(s.id, item.id === 0 ? null : item.id)}
               />
             </td>
             <td>
@@ -370,6 +461,116 @@ export function SiteTable({ world, onEdit, startSite, onPick, onLocate, onDelete
           </tr>
         ))}
       </tbody>
+    </table>
+    </>
+  );
+}
+
+interface DivisionTableProps {
+  world: World;
+  onRename: (id: number, name: string) => void;
+  onRank: (id: number, rank: number) => void;
+  onParent: (id: number, parent: number | null) => void;
+  /** 点「治所…」：接着在地图上点一个据点。 */
+  onSeat: (id: number) => void;
+  /** 正在给它挑治所的那个辖区；没有就是 null。 */
+  pickingSeat: number | null;
+  onDelete: (id: number) => void;
+  onAdd: () => void;
+}
+
+/**
+ * 辖区表：一片地方的行政归属。等级只约束辖区之间；治所是一个据点，随时可迁。
+ * 名字能改，等级与上级辖区能就地改，末尾一列删除（要按两下）。
+ */
+export function DivisionTable({
+  world,
+  onRename,
+  onRank,
+  onParent,
+  onSeat,
+  pickingSeat,
+  onDelete,
+  onAdd,
+}: DivisionTableProps) {
+  return (
+    <table>
+      <thead>
+        <tr>
+          <th>名字</th>
+          <th>等级</th>
+          <th>上级辖区</th>
+          <th>治所</th>
+          <th>据点</th>
+          <th>下级辖区</th>
+          <th>删除</th>
+        </tr>
+      </thead>
+      <tbody>
+        {world.divisions.length === 0 ? (
+          <tr>
+            <td className="ro" colSpan={7}>
+              还没有辖区。
+            </td>
+          </tr>
+        ) : null}
+        {world.divisions.map((d) => {
+          const siteCount = world.sites.filter((x) => x.division === d.id).length;
+          const belowCount = world.divisions.filter((x) => x.parent === d.id).length;
+          return (
+            <tr key={d.id}>
+              <td>
+                <input value={d.name} onChange={(e) => onRename(d.id, e.target.value)} />
+              </td>
+              <td>
+                <input
+                  type="number"
+                  title="等级：上级辖区不低于它、下级辖区不高于它"
+                  value={d.rank}
+                  onChange={(e) => onRank(d.id, toNumber(e.target.value, d.rank))}
+                />
+              </td>
+              <td>
+                <NamePicker
+                  value={d.parent === null ? '（无）' : divisionName(world, d.parent)}
+                  items={[
+                    { id: 0, name: '（无）' },
+                    ...world.divisions
+                      .filter((x) => x.id !== d.id)
+                      .map((x) => ({ id: x.id, name: x.name, tag: '#' + String(x.id) })),
+                  ]}
+                  label="上级辖区"
+                  emptyPick={{ id: 0, name: '（无）' }}
+                  onPick={(item) => onParent(d.id, item.id === 0 ? null : item.id)}
+                />
+              </td>
+              <td>
+                <div className="row">
+                  <span className={d.seat === null ? 'dim' : undefined}>
+                    {d.seat === null ? '（无）' : siteName(world, d.seat)}
+                  </span>
+                  <button onClick={() => onSeat(d.id)}>治所…</button>
+                </div>
+                {pickingSeat === d.id ? (
+                  <div className="dim small">在地图上点一个据点作治所（Esc 或点空白处取消）</div>
+                ) : null}
+              </td>
+              <td className="ro">{siteCount}</td>
+              <td className="ro">{belowCount}</td>
+              <td>
+                <DeleteButton what={'辖区「' + d.name + '」'} onConfirm={() => onDelete(d.id)} />
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+      <tfoot>
+        <tr>
+          <td colSpan={7}>
+            <button onClick={onAdd}>＋ 新增辖区</button>
+          </td>
+        </tr>
+      </tfoot>
     </table>
   );
 }

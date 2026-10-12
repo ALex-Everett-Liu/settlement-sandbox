@@ -4,6 +4,7 @@ import * as fs from 'node:fs';
 import { DatabaseSync, backup } from 'node:sqlite';
 import type {
   Ask,
+  Division,
   Faction,
   FoodPolicy,
   Id,
@@ -16,18 +17,22 @@ import type {
   Unit,
   World,
 } from '../engine/types.ts';
-import { emptyWorld } from '../engine/world.ts';
+import { emptyWorld, levelsFromParents } from '../engine/world.ts';
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 5;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS factions (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS divisions (
+  id INTEGER PRIMARY KEY, name TEXT NOT NULL, rank INTEGER NOT NULL,
+  parent INTEGER, seat INTEGER
+);
 CREATE TABLE IF NOT EXISTS sites (
   id INTEGER PRIMARY KEY, name TEXT NOT NULL, x REAL NOT NULL, y REAL NOT NULL,
   scale INTEGER NOT NULL, population INTEGER NOT NULL, morale REAL NOT NULL,
   stability REAL NOT NULL, money REAL NOT NULL, food REAL NOT NULL,
-  parent INTEGER, faction INTEGER NOT NULL
+  parent INTEGER, level INTEGER NOT NULL, division INTEGER, faction INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS links (
   id INTEGER PRIMARY KEY, a INTEGER NOT NULL, b INTEGER NOT NULL,
@@ -107,6 +112,27 @@ function migrate(db: DatabaseSync, dbPath: string, from: number): void {
       db.exec('ALTER TABLE links_v3 RENAME TO links');
       steps.push('links.distance 换成 detour，一律 1.0');
     }
+    if (from < 4) {
+      if (!hasColumn(db, 'sites', 'level')) {
+        db.exec('ALTER TABLE sites ADD COLUMN level INTEGER NOT NULL DEFAULT 0');
+      }
+      // 初值用「按上下级算出来」的那一套：升完画面与升级前一致，之后由 User 自己调。
+      const rows = db.prepare('SELECT id, parent FROM sites').all() as Array<{ id: number; parent: number | null }>;
+      const levels = levelsFromParents(
+        rows.map((r) => ({ id: Number(r.id), parent: r.parent === null ? null : Number(r.parent) })),
+      );
+      const setLevel = db.prepare('UPDATE sites SET level = ? WHERE id = ?');
+      for (const r of rows) setLevel.run(levels.get(Number(r.id)) ?? 0, Number(r.id));
+      steps.push('sites 加 level，按现有的上下级算出初值');
+    }
+    if (from < 5) {
+      // 辖区是另一棵树：行政区划不是地点，治所只是它当下借用的那个据点。
+      // 旧的据点—据点上级关系原样留着——它的含义从此是「所属据点」（地理包含）。
+      if (!hasColumn(db, 'sites', 'division')) {
+        db.exec('ALTER TABLE sites ADD COLUMN division INTEGER');
+      }
+      steps.push('加 divisions 表与 sites.division（辖区为空，旧关系当作所属据点）');
+    }
     metaSet(db, 'schema_version', String(SCHEMA_VERSION));
     db.exec('COMMIT');
   } catch (e) {
@@ -182,6 +208,7 @@ export function saveWorld(db: DatabaseSync, world: World): void {
   db.exec('BEGIN');
   try {
     db.exec('DELETE FROM factions');
+    db.exec('DELETE FROM divisions');
     db.exec('DELETE FROM sites');
     db.exec('DELETE FROM links');
     db.exec('DELETE FROM units');
@@ -189,12 +216,18 @@ export function saveWorld(db: DatabaseSync, world: World): void {
     const insFaction = db.prepare('INSERT INTO factions (id, name) VALUES (?, ?)');
     for (const f of world.factions) insFaction.run(f.id, f.name);
 
+    const insDivision = db.prepare('INSERT INTO divisions (id, name, rank, parent, seat) VALUES (?, ?, ?, ?, ?)');
+    for (const d of world.divisions) insDivision.run(d.id, d.name, d.rank, d.parent, d.seat);
+
     const insSite = db.prepare(
-      'INSERT INTO sites (id, name, x, y, scale, population, morale, stability, money, food, parent, faction)' +
-        ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO sites (id, name, x, y, scale, population, morale, stability, money, food, parent, level, division, faction)' +
+        ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     );
     for (const s of world.sites) {
-      insSite.run(s.id, s.name, s.x, s.y, s.scale, s.population, s.morale, s.stability, s.money, s.food, s.parent, s.faction);
+      insSite.run(
+        s.id, s.name, s.x, s.y, s.scale, s.population, s.morale,
+        s.stability, s.money, s.food, s.parent, s.level, s.division, s.faction,
+      );
     }
 
     const insLink = db.prepare('INSERT INTO links (id, a, b, detour, terrain) VALUES (?, ?, ?, ?, ?)');
@@ -249,12 +282,22 @@ export function loadWorld(db: DatabaseSync): World {
   for (const r of db.prepare('SELECT * FROM factions ORDER BY id').all() as Array<Record<string, unknown>>) {
     w.factions.push({ id: Number(r['id']), name: String(r['name']) } satisfies Faction);
   }
+  for (const r of db.prepare('SELECT * FROM divisions ORDER BY id').all() as Array<Record<string, unknown>>) {
+    w.divisions.push({
+      id: Number(r['id']), name: String(r['name']), rank: Number(r['rank']),
+      parent: r['parent'] === null ? null : Number(r['parent']),
+      seat: r['seat'] === null ? null : Number(r['seat']),
+    } satisfies Division);
+  }
   for (const r of db.prepare('SELECT * FROM sites ORDER BY id').all() as Array<Record<string, unknown>>) {
     w.sites.push({
       id: Number(r['id']), name: String(r['name']), x: Number(r['x']), y: Number(r['y']),
       scale: Number(r['scale']), population: Number(r['population']), morale: Number(r['morale']),
       stability: Number(r['stability']), money: Number(r['money']), food: Number(r['food']),
-      parent: r['parent'] === null ? null : Number(r['parent']), faction: Number(r['faction']),
+      parent: r['parent'] === null ? null : Number(r['parent']),
+      level: Number(r['level'] ?? 0),
+      division: r['division'] === null || r['division'] === undefined ? null : Number(r['division']),
+      faction: Number(r['faction']),
     } satisfies Site);
   }
   for (const r of db.prepare('SELECT * FROM links ORDER BY id').all() as Array<Record<string, unknown>>) {

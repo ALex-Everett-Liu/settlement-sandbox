@@ -1,7 +1,7 @@
-import type { Faction, Id, Link, Site, Terrain, Unit, World } from './types.ts';
+import type { Division, Faction, Id, Link, Site, Terrain, Unit, World } from './types.ts';
 
 export function emptyWorld(): World {
-  return { day: 0, factions: [], sites: [], units: [], links: [], log: [], pending: null };
+  return { day: 0, factions: [], divisions: [], sites: [], units: [], links: [], log: [], pending: null };
 }
 
 /**
@@ -75,6 +75,206 @@ export function otherEnd(link: Link, from: Id): Id {
   return link.a === from ? link.b : link.a;
 }
 
+/**
+ * 把 id 挂到 parent 下面会不会成环：沿上级一路往上，能走回 id 就会。
+ * seen 记走过的据点：库里要是已经有一个环，也不再绕圈，直接当成会成环挡回去。
+ */
+export function parentWouldCycle(world: World, id: Id, parent: Id): boolean {
+  let cur: Id | null = parent;
+  const seen = new Set<Id>();
+  while (cur !== null) {
+    if (cur === id) return true;
+    if (seen.has(cur)) return true;
+    seen.add(cur);
+    cur = siteById(world, cur)?.parent ?? null;
+  }
+  return false;
+}
+
+/**
+ * 这个层级值能不能写到某座据点上：上级的层级不低于它、下级的层级不高于它。
+ * 能写返回 null，不能写返回挡回来的理由——说明行直接用它。
+ */
+export function levelRefusal(world: World, id: Id, level: number): string | null {
+  const s = siteById(world, id);
+  if (!s) return null;
+  if (s.parent !== null) {
+    const p = siteById(world, s.parent);
+    if (p && level > p.level) {
+      return '上级「' + p.name + '」是第 ' + String(p.level) + ' 层，比第 ' + String(level) + ' 层低';
+    }
+  }
+  let worst: Site | null = null;
+  for (const c of world.sites) {
+    if (c.parent !== id) continue;
+    if (c.level > level && (worst === null || c.level > worst.level)) worst = c;
+  }
+  if (worst !== null) {
+    return '下级「' + worst.name + '」是第 ' + String(worst.level) + ' 层，比第 ' + String(level) + ' 层高';
+  }
+  return null;
+}
+
+/** 把 id 挂到 parent 下面，层级上过不过得去：候选的层级不能比它低。 */
+export function parentLevelRefusal(world: World, id: Id, parent: Id): string | null {
+  const s = siteById(world, id);
+  const p = siteById(world, parent);
+  if (!s || !p) return null;
+  if (p.level < s.level) {
+    return '「' + p.name + '」是第 ' + String(p.level) + ' 层，比「' + s.name + '」的第 ' + String(s.level) + ' 层低';
+  }
+  return null;
+}
+
+/**
+ * 上级到下一级的索引：key 是上级的编号，value 是直接挂在它下面的那些据点。
+ * 「层级」与「这一支」两处都用它。
+ */
+function childrenIndex(sites: Array<{ id: Id; parent: Id | null }>): Map<Id, Id[]> {
+  const children = new Map<Id, Id[]>();
+  for (const s of sites) {
+    if (s.parent === null) continue;
+    const list = children.get(s.parent);
+    if (list) list.push(s.id);
+    else children.set(s.parent, [s.id]);
+  }
+  return children;
+}
+
+/**
+ * 按「没有下级就是第 0 层，否则是下级里最高那一档加一」算每个据点的层级。
+ * 层级本身由 User 声明、存在 `Site.level` 里；这个算式只剩一个用处：库里升到 v4 时
+ * 给新字段一个初值（以及自检）。界面不再按它算记号。
+ * 走过的不再重算；库里要是有一个环，也不会绕个没完。
+ */
+export function levelsFromParents(sites: Array<{ id: Id; parent: Id | null }>): Map<Id, number> {
+  const children = childrenIndex(sites);
+  const level = new Map<Id, number>();
+  const walk = (id: Id, seen: Set<Id>): number => {
+    const known = level.get(id);
+    if (known !== undefined) return known;
+    if (seen.has(id)) return 0;
+    seen.add(id);
+    let top = -1;
+    for (const c of children.get(id) ?? []) top = Math.max(top, walk(c, seen));
+    const n = top + 1;
+    level.set(id, n);
+    return n;
+  };
+  for (const s of sites) walk(s.id, new Set());
+  return level;
+}
+
+/** 手上有一整个世界时的方便写法。 */
+export function siteLevels(world: World): Map<Id, number> {
+  return levelsFromParents(world.sites);
+}
+
+/** 这一支：root 自己，加上它下面所有层级的据点。环也收得住。 */
+export function siteBranch(world: World, root: Id): Set<Id> {
+  const children = childrenIndex(world.sites);
+  const out = new Set<Id>();
+  const stack: Id[] = [root];
+  while (stack.length > 0) {
+    const id = stack.pop()!;
+    if (out.has(id)) continue;
+    out.add(id);
+    for (const c of children.get(id) ?? []) stack.push(c);
+  }
+  return out;
+}
+
+// —— 辖区：一片地方的行政归属。它不是一个地点，治所只是它当下借用的那个据点。——
+
+export function addDivision(world: World, name: string, rank: number): Division {
+  const d: Division = { id: nextId(world.divisions), name, rank, parent: null, seat: null };
+  world.divisions.push(d);
+  return d;
+}
+
+export function divisionById(world: World, id: Id): Division | undefined {
+  return world.divisions.find((d) => d.id === id);
+}
+
+/** 辖区名，找不到就用编号顶上。 */
+export function divisionName(world: World, id: Id): string {
+  const d = divisionById(world, id);
+  return d ? d.name : '辖区 ' + String(id);
+}
+
+/**
+ * 一个辖区的地盘：自己名下的据点，加上各级下级辖区名下的据点。
+ * 治所必须落在这里面。环也收得住。
+ */
+export function divisionSites(world: World, id: Id): Set<Id> {
+  const out = new Set<Id>();
+  const seen = new Set<Id>();
+  const stack: Id[] = [id];
+  while (stack.length > 0) {
+    const cur = stack.pop()!;
+    if (seen.has(cur)) continue;
+    seen.add(cur);
+    for (const s of world.sites) if (s.division === cur) out.add(s.id);
+    for (const d of world.divisions) if (d.parent === cur) stack.push(d.id);
+  }
+  return out;
+}
+
+/** 把 id 挂到 parent 下面会不会成环：沿上级辖区一路往上，能走回 id 就会。 */
+export function divisionWouldCycle(world: World, id: Id, parent: Id): boolean {
+  let cur: Id | null = parent;
+  const seen = new Set<Id>();
+  while (cur !== null) {
+    if (cur === id) return true;
+    if (seen.has(cur)) return true;
+    seen.add(cur);
+    cur = divisionById(world, cur)?.parent ?? null;
+  }
+  return false;
+}
+
+/** 这个等级能不能写到某个辖区上：上级辖区不低于它、下级辖区不高于它。 */
+export function divisionRankRefusal(world: World, id: Id, rank: number): string | null {
+  const d = divisionById(world, id);
+  if (!d) return null;
+  if (d.parent !== null) {
+    const p = divisionById(world, d.parent);
+    if (p && rank > p.rank) {
+      return '上级辖区「' + p.name + '」是第 ' + String(p.rank) + ' 级，比第 ' + String(rank) + ' 级低';
+    }
+  }
+  let worst: Division | null = null;
+  for (const c of world.divisions) {
+    if (c.parent !== id) continue;
+    if (c.rank > rank && (worst === null || c.rank > worst.rank)) worst = c;
+  }
+  if (worst !== null) {
+    return '下级辖区「' + worst.name + '」是第 ' + String(worst.rank) + ' 级，比第 ' + String(rank) + ' 级高';
+  }
+  return null;
+}
+
+/** 治所能不能设成这个据点：必须在自己的整棵子树里。 */
+export function seatRefusal(world: World, division: Id, site: Id): string | null {
+  const d = divisionById(world, division);
+  if (!d) return null;
+  if (divisionSites(world, division).has(site)) return null;
+  return '「' + siteName(world, site) + '」不在「' + d.name + '」的地盘里';
+}
+
+/**
+ * 据点自己的层数与它所属辖区的等级对不上时就提醒一句（不挡）：
+ * 这个地方声明得比管它的辖区还高。对得上、或者没有辖区，都返回 null。
+ */
+export function siteDivisionNote(world: World, site: Id, division: Id | null): string | null {
+  if (division === null) return null;
+  const s = siteById(world, site);
+  const d = divisionById(world, division);
+  if (!s || !d) return null;
+  if (s.level <= d.rank) return null;
+  return '「' + s.name + '」是第 ' + String(s.level) + ' 层，比它所属的「' + d.name + '」（第 ' + String(d.rank) + ' 级）还高';
+}
+
 export function cloneWorld(world: World): World {
   return structuredClone(world);
 }
@@ -95,11 +295,11 @@ export function demoWorld(): World {
 
   const a = addSite(w, {
     name: 'A 城', x: 1000, y: 2000, scale: 3, population: 9000,
-    morale: 70, stability: 60, money: 1000, food: 1000, parent: null, faction: wei.id,
+    morale: 70, stability: 60, money: 1000, food: 1000, parent: null, level: 0, division: null, faction: wei.id,
   });
   const b = addSite(w, {
     name: 'B 城', x: 3000, y: 2500, scale: 2, population: 6000,
-    morale: 65, stability: 55, money: 800, food: 800, parent: null, faction: shu.id,
+    morale: 65, stability: 55, money: 800, food: 800, parent: null, level: 0, division: null, faction: shu.id,
   });
 
   addLink(w, a.id, b.id, 1, 'plain');

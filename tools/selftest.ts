@@ -4,7 +4,23 @@ import { answerAsk } from '../src/engine/ask.ts';
 import { DEFAULT_PARAMS } from '../src/engine/params.ts';
 import { mulberry32 } from '../src/engine/rng.ts';
 import { dayOfMonth, isMonthEnd, marchDays, month, tickDay, year } from '../src/engine/tick.ts';
-import { demoWorld, linkLength, worldFromJson, worldToJson } from '../src/engine/world.ts';
+import {
+  addDivision,
+  demoWorld,
+  divisionRankRefusal,
+  divisionSites,
+  divisionWouldCycle,
+  levelRefusal,
+  linkLength,
+  parentLevelRefusal,
+  parentWouldCycle,
+  seatRefusal,
+  siteBranch,
+  siteDivisionNote,
+  siteLevels,
+  worldFromJson,
+  worldToJson,
+} from '../src/engine/world.ts';
 
 let bad = 0;
 function check(label: string, ok: boolean, extra = ''): void {
@@ -27,6 +43,63 @@ const wL = w.links[0]!;
 check(
   '连接的两端就是那两座城',
   (wL.a === wA.id && wL.b === wB.id) || (wL.a === wB.id && wL.b === wA.id),
+);
+
+// 上级：自己不能当自己的上级；挂上去之后再反过来，就会连成一个环。
+const wp = demoWorld();
+const pA = wp.sites[0]!;
+const pB = wp.sites[1]!;
+check('自己不能当自己的上级', parentWouldCycle(wp, pA.id, pA.id));
+check('A 挂到 B 下面不成环', !parentWouldCycle(wp, pA.id, pB.id));
+pA.parent = pB.id;
+check('挂上之后再反过来就成环', parentWouldCycle(wp, pB.id, pA.id));
+
+// 层级与「这一支」：没有下级是第 0 层；有下级的按下级里最高的那一档加一。
+const wl = demoWorld();
+const lA = wl.sites[0]!;
+const lB = wl.sites[1]!;
+const lv0 = siteLevels(wl);
+check('两座都没有下级时都是第 0 层', lv0.get(lA.id) === 0 && lv0.get(lB.id) === 0);
+lA.parent = lB.id;
+const lv1 = siteLevels(wl);
+check('A 挂到 B 下面之后 B 是第 1 层、A 还是第 0 层', lv1.get(lB.id) === 1 && lv1.get(lA.id) === 0);
+const br = siteBranch(wl, lB.id);
+check('B 这一支收进 B 与 A 两座', br.size === 2 && br.has(lA.id) && br.has(lB.id));
+check('A 这一支只有它自己', siteBranch(wl, lA.id).size === 1);
+
+// 层级由 User 声明，系统只守一条：上级的层级不低于下级的层级——差多少不管，平级也行。
+const wr = demoWorld();
+const rA = wr.sites[0]!;
+const rB = wr.sites[1]!;
+check('层级都是 0 时，改挂放行', parentLevelRefusal(wr, rA.id, rB.id) === null);
+rA.level = 2;
+check('候选上级比它低，改挂挡回来', parentLevelRefusal(wr, rA.id, rB.id) !== null);
+rB.level = 2;
+check('与候选上级同级放行', parentLevelRefusal(wr, rA.id, rB.id) === null);
+rA.parent = rB.id;
+check('层级比上级高，改层级挡回来', levelRefusal(wr, rA.id, 3) !== null);
+check('与上级同级，改层级放行', levelRefusal(wr, rA.id, 2) === null);
+check('层级比下级低挡回来，与下级同级放行', levelRefusal(wr, rB.id, 1) !== null && levelRefusal(wr, rB.id, 2) === null);
+
+// 辖区：等级只约束辖区之间；治所必须落在自己的整棵子树里。
+const wd = demoWorld();
+const sA = wd.sites[0]!;
+const sB = wd.sites[1]!;
+const d1 = addDivision(wd, '辽东郡', 1);
+const d2 = addDivision(wd, '幽州', 3);
+check('新辖区是一个空壳：没有上级、没有治所', d1.parent === null && d1.seat === null);
+d1.parent = d2.id;
+check('等级高过上级时挡回来', divisionRankRefusal(wd, d1.id, 4) !== null);
+check('不低于上级就放行（平级也行）', divisionRankRefusal(wd, d1.id, 3) === null);
+check('辖区之间也挡环', divisionWouldCycle(wd, d2.id, d1.id));
+sA.division = d2.id;
+sB.division = d1.id;
+check('地盘把下级辖区名下的据点也收进来', divisionSites(wd, d2.id).size === 2);
+check('治所不在自己地盘里就挡回来', seatRefusal(wd, d1.id, sA.id) !== null && seatRefusal(wd, d1.id, sB.id) === null);
+sA.level = 4;
+check(
+  '据点层数高过辖区等级时只提醒不挡',
+  siteDivisionNote(wd, sA.id, d2.id) !== null && siteDivisionNote(wd, sB.id, d1.id) === null,
 );
 
 console.log('\n== 日历 ==');
