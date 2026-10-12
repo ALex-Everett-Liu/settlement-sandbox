@@ -25,8 +25,29 @@ import {
 } from '../engine/world.ts';
 import type { SandboxApi } from '../shared/ipc.ts';
 import { MapView } from './map.tsx';
+import {
+  emptyListStates,
+  LIST_LABEL,
+  newestFirst,
+  PAGE_LISTS,
+  pageCount,
+  pageOfRow,
+  sortRows,
+  tableRows,
+} from './paging.ts';
+import type { ListState, OnlyBranch, PageList } from './paging.ts';
 import { SettingsView, PARAM_RANGE } from './settings.tsx';
-import { DivisionTable, FactionTable, LinkTable, SiteTable, TerrainTable, TERRAIN_RANGE, UnitTable } from './tables.tsx';
+import {
+  DivisionTable,
+  FactionTable,
+  LinkTable,
+  Pager,
+  SiteTable,
+  TERRAIN_RANGE,
+  TerrainTable,
+  UnitTable,
+} from './tables.tsx';
+import type { ListBarProps } from './tables.tsx';
 
 const api = (window as unknown as { sandbox?: SandboxApi }).sandbox;
 const SPEEDS = [1, 2, 4, 8, 16];
@@ -58,15 +79,20 @@ function terrainRefusal(patch: Partial<Terrain>): string | null {
   return null;
 }
 
-/** 设置页签的一笔改动能不能写回：越界、以及上界小于下界，都挡回来，不动 User 填的数。 */
+/**
+ * 设置页签的一笔改动能不能写回：越界、不是整数、以及上界小于下界，都挡回来，不动 User 填的数。
+ */
 function paramsRefusal(params: Params, patch: Partial<Params>): string | null {
-  for (const key of ['mapWidth', 'mapHeight', 'zoomMin', 'zoomMax'] as const) {
+  for (const key of ['mapWidth', 'mapHeight', 'zoomMin', 'zoomMax', 'pageSize'] as const) {
     const v = patch[key];
     if (v === undefined) continue;
     const r = PARAM_RANGE[key];
     if (!(v >= r.lo && v <= r.hi)) {
       return r.label + '只收 ' + String(r.lo) + ' 到 ' + String(r.hi) + ' 之间的数，「' + String(v) + '」不写回去';
     }
+  }
+  if (patch.pageSize !== undefined && !Number.isInteger(patch.pageSize)) {
+    return '每页几条只收 1 到 1000 之间的整数，「' + String(patch.pageSize) + '」不写回去';
   }
   const zoomMin = patch.zoomMin ?? params.zoomMin;
   const zoomMax = patch.zoomMax ?? params.zoomMax;
@@ -76,6 +102,13 @@ function paramsRefusal(params: Params, patch: Partial<Params>): string | null {
     );
   }
   return null;
+}
+
+/**
+ * 新增之后的说明行：多半跳到它那一页；被筛掉时（据点表的「只看某一支」）说清楚为什么看不见。
+ */
+function addedNote(text: string, page: number): string {
+  return page === 0 ? text + '；它不在当前的筛选里，表里看不见它' : text + '；在第 ' + String(page) + ' 页';
 }
 
 type View = 'factions' | 'divisions' | 'sites' | 'units' | 'links' | 'terrains' | 'map' | 'settings';
@@ -107,6 +140,10 @@ export function App() {
   const [parentTarget, setParentTarget] = useState(0);
   // 据点表「只看某一支」选中的那一座；null 就是全部。
   const [onlySite, setOnlySite] = useState<{ kind: 'site' | 'division'; id: number; name: string } | null>(null);
+  // 六张表各自的页码与排序。切页签回来还停在原来那一页；筛或排序一变就回到第 1 页。
+  const [lists, setLists] = useState<Record<PageList, ListState>>(emptyListStates);
+  // 日志那一段的页码。它不排序（本来就是新的在上），所以只有一个数。
+  const [logPage, setLogPage] = useState(1);
   // 正在给哪个辖区挑治所：0 表示没有。与前面几种共用地图上那一次点选。
   const [seatTarget, setSeatTarget] = useState(0);
   // 「定位」请求：n 是次数，同一个目标按两次也要重新定位一次。
@@ -121,6 +158,24 @@ export function App() {
     worldRef.current = w;
     setWorld({ ...w });
   }, []);
+
+  /**
+   * 新增之后跳到那一行所在的页。行被筛掉时不动页码并返回 0，
+   * 由说明行（addedNote）写一句「看不见它」。
+   * 放在这里、几个「新增」回调之前，是因为那几个回调把它写进了依赖表里。
+   */
+  const jumpToRow = useCallback(
+    (list: PageList, id: number): number => {
+      const w = worldRef.current;
+      if (!w) return 0;
+      const branch = onlySite === null ? null : { kind: onlySite.kind, id: onlySite.id };
+      const rows = sortRows(tableRows(w, list, branch), lists[list].sort, (r) => r.name);
+      const page = pageOfRow(rows, id, params.pageSize);
+      if (page > 0) setLists((s) => ({ ...s, [list]: { ...s[list], page } }));
+      return page;
+    },
+    [lists, onlySite, params.pageSize],
+  );
 
   useEffect(() => {
     let alive = true;
@@ -235,9 +290,9 @@ export function App() {
     if (!w) return;
     const d = addDivision(w, '新辖区 ' + String(w.divisions.length + 1), 0);
     commit(w);
-    setNote('新增辖区：' + d.name + '（#' + String(d.id) + '）');
+    setNote(addedNote('新增辖区：' + d.name + '（#' + String(d.id) + '）', jumpToRow('divisions', d.id)));
     if (api) void api.saveWorld(w);
-  }, [commit]);
+  }, [commit, jumpToRow]);
 
   const renameDivision = useCallback(
     (id: number, name: string) => {
@@ -469,9 +524,9 @@ export function App() {
     if (!w) return;
     const t = addTerrain(w, '新地貌 ' + String(w.terrains.length + 1), 1, 100, 1, 1);
     commit(w);
-    setNote('新增地貌：' + t.name + '（#' + String(t.id) + '）');
+    setNote(addedNote('新增地貌：' + t.name + '（#' + String(t.id) + '）', jumpToRow('terrains', t.id)));
     if (api) void api.saveWorld(w);
-  }, [commit]);
+  }, [commit, jumpToRow]);
 
   /**
    * 删一档地貌：有连接指着它就不许删；表里只剩一档时也不许删——连接上没填地貌时
@@ -519,9 +574,9 @@ export function App() {
     if (!w) return;
     const f = addFaction(w, '新势力 ' + String(w.factions.length + 1));
     commit(w);
-    setNote('新增势力：' + f.name + '（#' + String(f.id) + '）');
+    setNote(addedNote('新增势力：' + f.name + '（#' + String(f.id) + '）', jumpToRow('factions', f.id)));
     if (api) void api.saveWorld(w);
-  }, [commit]);
+  }, [commit, jumpToRow]);
 
   /** 势力表里按「删除」：名下还挂着据点或部队就不删，说明行写清楚还挂着多少。 */
   const deleteFaction = useCallback(
@@ -650,10 +705,15 @@ export function App() {
         money: 0, food: 0, parent: null, level: 0, division: null, faction: w.factions[0]?.id ?? 1,
       });
       commit(w);
-      setNote('新增据点：' + s.name + '（' + String(x) + '，' + String(y) + '）');
+      setNote(
+        addedNote(
+          '新增据点：' + s.name + '（' + String(x) + '，' + String(y) + '）',
+          jumpToRow('sites', s.id),
+        ),
+      );
       if (api) void api.saveWorld(w);
     },
-    [commit],
+    [commit, jumpToRow],
   );
 
   /** 在这两座据点之间加一条连接：地貌先留空，引擎走到它上面时会停下来问。 */
@@ -856,6 +916,50 @@ export function App() {
     return u && u.place.kind === 'site' ? u.place.site : null;
   })();
 
+  /** 据点表「只看某一支」的筛选，写成 paging 那一边认的写法。 */
+  const onlyBranch: OnlyBranch | null = onlySite === null ? null : { kind: onlySite.kind, id: onlySite.id };
+
+  /**
+   * 表上方那一行要的东西。页码与排序是界面状态，不进世界库；每页几条来自参数表。
+   * 换排序就回到第 1 页——顺序一变，原来那一页装的就是另一段行了。
+   */
+  const bar = (list: PageList): ListBarProps => ({
+    page: lists[list].page,
+    pageSize: params.pageSize,
+    sort: lists[list].sort,
+    onPage: (page: number) => setLists((s) => ({ ...s, [list]: { ...s[list], page } })),
+    onSort: (sort) => setLists((s) => ({ ...s, [list]: { ...s[list], sort, page: 1 } })),
+    onNote: setNote,
+  });
+
+  /**
+   * 页码落空：删条目、改小每页条数之后，当前页码可能超出最大页。
+   * 退到末页，并把退页写进说明行——不把一张空表摆给 User 看。
+   */
+  useEffect(() => {
+    if (!world) return;
+    const branch = onlySite === null ? null : { kind: onlySite.kind, id: onlySite.id };
+    const over: string[] = [];
+    const next: Partial<Record<PageList, ListState>> = {};
+    for (const list of PAGE_LISTS) {
+      const pages = pageCount(tableRows(world, list, branch).length, params.pageSize);
+      const cur = lists[list].page;
+      if (cur > pages) {
+        next[list] = { ...lists[list], page: pages };
+        over.push(LIST_LABEL[list] + '：第 ' + String(cur) + ' 页没有了，退到第 ' + String(pages) + ' 页');
+      }
+    }
+    const logPages = pageCount(world.log.length, params.pageSize);
+    const logOver = logPage > logPages;
+    if (over.length === 0 && !logOver) return;
+    if (over.length > 0) setLists((s) => ({ ...s, ...next }));
+    if (logOver) {
+      setLogPage(logPages);
+      over.push('日志：第 ' + String(logPage) + ' 页没有了，退到第 ' + String(logPages) + ' 页');
+    }
+    setNote(over.join('；'));
+  }, [world, lists, logPage, onlySite, params.pageSize]);
+
   const calendar = world
     ? '第 ' + year(world, params) + ' 年 ' + month(world, params) + ' 月 ' + dayOfMonth(world, params) + ' 日'
     : '—';
@@ -869,7 +973,16 @@ export function App() {
     map: world ? world.sites.length : 0,
     settings: 0,
   };
-  const logTail = world ? world.log.slice(-14).reverse() : [];
+  /** 这一页上的日志行：新的在上，第 1 页是最新的那 pageSize 条。 */
+  const logShown = world ? newestFirst(world.log, logPage, params.pageSize) : [];
+  const logTotal = world ? world.log.length : 0;
+  // 日志只有页码，没有排序：它本来就是新的在上。
+  const logBar: ListBarProps = {
+    page: logPage,
+    pageSize: params.pageSize,
+    onPage: setLogPage,
+    onNote: setNote,
+  };
 
   return (
     <div className="app">
@@ -955,6 +1068,7 @@ export function App() {
             {view === 'factions' ? (
               <FactionTable
                 world={world}
+                bar={bar('factions')}
                 onRename={renameFaction}
                 onDelete={deleteFaction}
                 onAdd={addFactionRow}
@@ -962,6 +1076,7 @@ export function App() {
             ) : view === 'divisions' ? (
               <DivisionTable
                 world={world}
+                bar={bar('divisions')}
                 onRename={renameDivision}
                 onRank={editDivisionRank}
                 onParent={editDivisionParent}
@@ -973,6 +1088,7 @@ export function App() {
             ) : view === 'sites' ? (
               <SiteTable
                 world={world}
+                bar={bar('sites')}
                 onEdit={editSite}
                 startSite={linkFrom === 0 ? null : linkFrom}
                 onPick={pickSite}
@@ -981,14 +1097,18 @@ export function App() {
                 onLocate={locateSite}
                 onDelete={deleteSite}
                 only={onlySite}
-                onOnly={setOnlySite}
+                onOnly={(item) => {
+                  setOnlySite(item);
+                  // 筛完之后行换了一批，从第一页看起。
+                  setLists((s) => ({ ...s, sites: { ...s.sites, page: 1 } }));
+                }}
                 onEditLevel={editSiteLevel}
                 onEditDivision={editSiteDivision}
-                onNote={setNote}
               />
             ) : view === 'units' ? (
               <UnitTable
                 world={world}
+                bar={bar('units')}
                 onEdit={editUnit}
                 onOrder={editQueue}
                 onPickDestination={startOrderPick}
@@ -997,14 +1117,14 @@ export function App() {
                 onDelete={deleteUnit}
               />
             ) : view === 'links' ? (
-              <LinkTable world={world} onEdit={editLink} onDelete={deleteLink} />
+              <LinkTable world={world} bar={bar('links')} onEdit={editLink} onDelete={deleteLink} />
             ) : view === 'terrains' ? (
               <TerrainTable
                 world={world}
+                bar={bar('terrains')}
                 onEdit={editTerrain}
                 onDelete={deleteTerrain}
                 onAdd={addTerrainRow}
-                onNote={setNote}
               />
             ) : view === 'settings' ? (
               <SettingsView world={world} params={params} theme={theme} onChange={writeParams} onNote={setNote} />
@@ -1013,8 +1133,17 @@ export function App() {
         )}
 
         <section className="log">
-          <h3>日志（最近 14 条，新的在上）</h3>
-          {logTail.length === 0 ? <p className="dim">还没有日志。</p> : <ol>{logTail.map((line, i) => <li key={i}>{line}</li>)}</ol>}
+          <h3>日志（新的在上）</h3>
+          <Pager total={logTotal} what="日志" bar={logBar} />
+          {logShown.length === 0 ? (
+            <p className="dim">还没有日志。</p>
+          ) : (
+            <ol>
+              {logShown.map((line, i) => (
+                <li key={String(logPage) + '-' + String(i)}>{line}</li>
+              ))}
+            </ol>
+          )}
         </section>
       </main>
 

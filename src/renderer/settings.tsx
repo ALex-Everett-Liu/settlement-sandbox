@@ -1,19 +1,20 @@
-// 设置页签：地图与缩放这四个数，加上主题。其余参数还等第四块那张参数表。
+// 设置页签：地图、缩放、每页条数这几个数，加上主题。其余参数还等第四块那张参数表。
 import type { Params, Theme, World } from '../engine/types.ts';
 import { NumberCell } from './tables.tsx';
 
 /**
- * 这四个数各自的上下限与中文名。越界的写法一律挡回来（见 App 的 paramsRefusal），
+ * 这几个数各自的上下限与中文名。越界的写法一律挡回来（见 App 的 paramsRefusal），
  * 由界面把理由写进说明行，等 User 自己改一个数——不夹到边界，也不替 User 改数。
  */
 export const PARAM_RANGE: Record<
-  'mapWidth' | 'mapHeight' | 'zoomMin' | 'zoomMax',
+  'mapWidth' | 'mapHeight' | 'zoomMin' | 'zoomMax' | 'pageSize',
   { label: string; lo: number; hi: number; step: number }
 > = {
   mapWidth: { label: '地图宽', lo: 100, hi: 1000000, step: 1 },
   mapHeight: { label: '地图高', lo: 100, hi: 1000000, step: 1 },
   zoomMin: { label: '倍数下界', lo: 0.0001, hi: 1, step: 0.001 },
   zoomMax: { label: '倍数上界', lo: 0.01, hi: 100, step: 0.5 },
+  pageSize: { label: '每页几条', lo: 1, hi: 1000, step: 1 },
 };
 
 interface SettingsProps {
@@ -136,6 +137,26 @@ export function SettingsView({ world, params, theme, onChange, onNote }: Setting
               />
             </td>
             <td className="ro">最多放到这么大。放到 1 以上时，1 个地图单位比 1 个像素还宽。</td>
+          </tr>
+          <tr>
+            <td className="ro">每页几条</td>
+            <td>
+              <NumberCell
+                value={params.pageSize}
+                min={PARAM_RANGE.pageSize.lo}
+                max={PARAM_RANGE.pageSize.hi}
+                step={PARAM_RANGE.pageSize.step}
+                whole
+                label="每页几条"
+                title="六张表与日志每页显示多少条。1 到 1000 之间的整数。"
+                onCommit={(v) => onChange({ pageSize: v })}
+                onNote={onNote}
+              />
+            </td>
+            <td className="ro">
+              六张表与日志每页显示多少条。条目一多，整张表一次画完会把界面拖垮，所以按这个数分页。
+              改小之后当前页码要是落空，界面会退到末页并写一句。
+            </td>
           </tr>
         </tbody>
       </table>

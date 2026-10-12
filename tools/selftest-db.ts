@@ -126,6 +126,16 @@ check('补齐时报告缺的字段', filled.length === 1 && filled[0] === 'theme
 check('补齐后 theme 有了', loadParams(db)?.theme === 'light', String(loadParams(db)?.theme));
 check('再补一次不动它', fillParamsGaps(db, p).length === 0);
 
+// 加 pageSize 之前写下的 params：同一个做法再走一遍。这一项不升 schema——参数表是 meta 里一段 JSON，
+// 旧库打开时按默认值补齐，所以每页条数在旧库上也有值。
+db.exec("DELETE FROM meta WHERE k = 'params'");
+const older = { ...p } as Record<string, unknown>;
+delete older['pageSize'];
+db.prepare('INSERT INTO meta (k, v) VALUES (?, ?)').run('params', JSON.stringify(older));
+const filledPage = fillParamsGaps(db, p);
+check('缺 pageSize 时报告它', filledPage.length === 1 && filledPage[0] === 'pageSize', filledPage.join('、'));
+check('补齐后每页 50 条', loadParams(db)?.pageSize === 50, String(loadParams(db)?.pageSize));
+
 console.log('\n== 旧库升级 ==');
 // 手工造一份 v1 形状的库：links.terrain 是 NOT NULL，units 表还没有。
 const legacyPath = path.join(dir, 'legacy-v1.db');

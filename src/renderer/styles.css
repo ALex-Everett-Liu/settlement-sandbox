@@ -285,6 +285,26 @@ tfoot button {
   white-space: nowrap;
 }
 
+/* 表上方那一行：筛选、排序、翻页挤在一行里。
+   据点表那个筛选格给个固定宽度，不然 .picker 的 width: 100% 会占满一整行。 */
+.listbar {
+  margin-bottom: 6px;
+}
+
+.listbar .picker {
+  width: 240px;
+}
+
+.sortbar,
+.pager {
+  gap: 6px;
+}
+
+.pager input {
+  width: 72px;
+  text-align: right;
+}
+
 /* 按名字挑一个东西：输入框下面挂一张过滤出来的短列表。 */
 .picker {
   position: relative;
@@ -330,8 +350,8 @@ tfoot button {
   font-size: 12px;
 }
 
-/* 打进去的字与任何名字都对不上：字留在格子里，把格子标出来。 */
-.picker input.bad {
+/* 打进去的字写不回去：字留在格子里，把格子标出来。数字格、页码格与挑名字那三处共用这一条。 */
+input.bad {
   border-color: #c2410c;
   color: #c2410c;
 }

@@ -39,6 +39,12 @@ export const DEFAULT_PARAMS: Params = {
   zoomMin: 0.02,
   zoomMax: 6,
 
+  /**
+   * 六张表与日志每页几条。界面读它，引擎不读。旧库里没有这一项，打开时按默认值补上
+   * （`fillParamsGaps`），所以不用升 schema。
+   */
+  pageSize: 50,
+
   /** The window opens light; the toggle writes the other value back to the database. */
   theme: 'light',
 };

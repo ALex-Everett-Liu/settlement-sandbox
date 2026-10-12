@@ -204,6 +204,12 @@ export interface Params {
   zoomMin: number;
   zoomMax: number;
 
+  /**
+   * 六张表与日志每页显示多少条。引擎不读它，只有界面读：条目一多，整张表一次画完会把界面拖垮。
+   * 取值范围与「越界写不回去」那条规矩见 §六。
+   */
+  pageSize: number;
+
   /** UI theme. The engine never reads it; only the shell does. */
   theme: Theme;
 }

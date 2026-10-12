@@ -1,10 +1,22 @@
 // The four views of one switchable table: factions, sites, units, links.
 // Anything the designer may edit is an input; derived values (position, order
 // queue, the five totals on a faction row) stay read-only text.
+// 每张表上方那一行是共用的一套：筛选（据点表有）、排序两个按钮、翻页那一组。
 import { useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import type { Link, Order, Site, Terrain, Unit, World } from '../engine/types.ts';
-import { divisionName, divisionSites, linkLength, siteBranch, terrainLinks, terrainName } from '../engine/world.ts';
+import {
+  divisionName,
+  divisionSites,
+  linkLength,
+  linkName,
+  siteBranch,
+  terrainLinks,
+  terrainName,
+} from '../engine/world.ts';
 import { factionName, garrisonText, orderText, placeText, round1, round2, siteName } from './format.ts';
+import { DEFAULT_SORT, isPageNumber, pageCount, pageRows, sortRows } from './paging.ts';
+import type { Sort } from './paging.ts';
 
 /**
  * 地貌那四个数各自的上下限、小数位与中文名。越界的写法一律挡回来（见 App 的 terrainRefusal），
@@ -41,7 +53,7 @@ function inRange(text: string, min: number, max: number): boolean {
  * 越界的草稿离开焦点也留着，直到改成一个写得回去的数。
  */
 export function NumberCell({
-  value, min, max, step, label, title, onCommit, onNote,
+  value, min, max, step, label, title, whole, onCommit, onNote,
 }: {
   value: number;
   min: number;
@@ -49,12 +61,15 @@ export function NumberCell({
   step: number;
   label: string;
   title: string;
+  /** 只收整数时传 true：小数也算写不回去，理由里写「整数」。 */
+  whole?: boolean;
   onCommit: (v: number) => void;
   onNote: (message: string) => void;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
   const text = draft ?? String(round1(value));
-  const bad = draft !== null && !inRange(draft, min, max);
+  const ok = (t: string) => inRange(t, min, max) && (whole !== true || Number.isInteger(Number(t)));
+  const bad = draft !== null && !ok(draft);
 
   return (
     <input
@@ -66,17 +81,18 @@ export function NumberCell({
       onChange={(e) => {
         const t = e.target.value;
         setDraft(t);
-        if (inRange(t, min, max)) {
+        if (ok(t)) {
           onCommit(Number(t));
           return;
         }
         onNote(
-          label + '只收 ' + String(min) + ' 到 ' + String(max) + ' 之间的数：' +
+          label + '只收 ' + String(min) + ' 到 ' + String(max) + ' 之间的' +
+            (whole === true ? '整数' : '数') + '：' +
             (t.trim() === '' ? '格子还空着' : '「' + t + '」写不回去') + '。改一个数再写，别的不动。',
         );
       }}
       onBlur={() => {
-        if (draft === null || inRange(draft, min, max)) setDraft(null);
+        if (draft === null || ok(draft)) setDraft(null);
       }}
     />
   );
@@ -109,6 +125,129 @@ function DeleteButton({ what, onConfirm }: { what: string; onConfirm: () => void
     >
       {armed ? '确认删除' : '删除'}
     </button>
+  );
+}
+
+/**
+ * 每一张表上方那一行要的东西：当前页码、每页条数，以及三个回调。
+ * 日志不排序，所以 sort 与 onSort 是可选的——那一行里只有页码与计数。
+ */
+export interface ListBarProps {
+  page: number;
+  pageSize: number;
+  onPage: (page: number) => void;
+  onNote: (message: string) => void;
+  sort?: Sort;
+  onSort?: (sort: Sort) => void;
+}
+
+/** 排序按钮：选中的那一个高亮并带一个箭头，再点一下就换方向。 */
+function SortButton({
+  text,
+  by,
+  sort,
+  onSort,
+}: {
+  text: string;
+  by: 'id' | 'name';
+  sort: Sort;
+  onSort: (sort: Sort) => void;
+}) {
+  const active = sort.key === by;
+  return (
+    <button
+      className={active ? 'tab active' : 'tab'}
+      title={active ? '再点一下改成倒序' : '按这一项排；再点一下就改成倒序'}
+      onClick={() => onSort({ key: by, up: active ? !sort.up : true })}
+    >
+      {text}
+      {active ? (sort.up ? ' ↑' : ' ↓') : ''}
+    </button>
+  );
+}
+
+/**
+ * 翻页那一组：可键入的页码格、「上一页」「下一页」与计数。页码格越界不写进去——
+ * 字留在格子里并标红，等 User 自己改（与数字格同一条规矩）。
+ * 条目少了、每页条数改小之后的「退到末页」由 App 做，不在这里：这里只管 User 敲的那一下。
+ */
+export function Pager({ total, what, bar }: { total: number; what: string; bar: ListBarProps }) {
+  const pages = pageCount(total, bar.pageSize);
+  // 草稿记着敲下去时停在第几页：页码从别处改了（跳页、退页）就把它丢掉，
+  // 免得格子里留着一个与当前页无关的数。
+  const [draft, setDraft] = useState<{ text: string; at: number } | null>(null);
+  const kept = draft !== null && draft.at === bar.page ? draft : null;
+  const text = kept === null ? String(bar.page) : kept.text;
+  const bad = kept !== null && !isPageNumber(kept.text, pages);
+
+  return (
+    <span className="row pager push">
+      <button onClick={() => bar.onPage(bar.page - 1)} disabled={bar.page <= 1}>
+        上一页
+      </button>
+      <button onClick={() => bar.onPage(bar.page + 1)} disabled={bar.page >= pages}>
+        下一页
+      </button>
+      <input
+        className={bad ? 'bad' : undefined}
+        value={text}
+        title={'第几页：1 到 ' + String(pages) + ' 之间的整数，敲完按回车或点别处'}
+        onChange={(e) => {
+          const typed = e.target.value;
+          setDraft({ text: typed, at: bar.page });
+          if (isPageNumber(typed, pages)) {
+            bar.onPage(Number(typed));
+            return;
+          }
+          bar.onNote(
+            what + '：页码只收 1 到 ' + String(pages) + ' 之间的整数：' +
+              (typed.trim() === '' ? '格子还空着' : '「' + typed + '」跳不过去') +
+              '。共 ' + String(total) + ' 条。',
+          );
+        }}
+        onBlur={() => {
+          if (kept === null || isPageNumber(kept.text, pages)) setDraft(null);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && isPageNumber(text, pages)) bar.onPage(Number(text));
+        }}
+      />
+      <span className="dim small">
+        第 {bar.page} / {pages} 页 · 共 {total} 条
+      </span>
+    </span>
+  );
+}
+
+/**
+ * 表上方那一行：筛选、排序、翻页三样挤在一起。
+ * 筛选那一块由调用方作为 children 传进来（只有据点表有），翻页那一组推到最右。
+ */
+function ListBar({
+  total,
+  what,
+  bar,
+  children,
+}: {
+  total: number;
+  what: string;
+  bar: ListBarProps;
+  children?: ReactNode;
+}) {
+  const sort = bar.sort;
+  const onSort = bar.onSort;
+  return (
+    <div className="row listbar">
+      {children}
+      {sort !== undefined && onSort !== undefined ? (
+        <span className="row sortbar">
+          <span className="dim small">排序</span>
+          <SortButton text="按编号" by="id" sort={sort} onSort={onSort} />
+          <SortButton text="按名称" by="name" sort={sort} onSort={onSort} />
+        </span>
+      ) : null}
+      <Pager total={total} what={what} bar={bar} />
+    </div>
   );
 }
 
@@ -233,6 +372,8 @@ function factionItems(world: World): PickItem[] {
 
 interface FactionTableProps {
   world: World;
+  /** 表上方那一行：页码、每页条数、排序。 */
+  bar: ListBarProps;
   /** 改名字：与别的表一样就地改，等月末那一次自动保存。 */
   onRename: (id: number, name: string) => void;
   /** 点「删除」（第二下）：名下还挂着据点或部队就会被挡回来，说明行写清楚还挂着多少。 */
@@ -244,13 +385,16 @@ interface FactionTableProps {
 /**
  * 势力表。名字能改，后面五列都是算出来的：名下有几座据点、几支部队，
  * 这些部队的兵力加总，以及这些据点自存的金钱与粮草（部队随身带着的那份不算在粮里）。
+ * 表上方那一行按编号或名称排；每页几条由设置页签给。
  */
-export function FactionTable({ world, onRename, onDelete, onAdd }: FactionTableProps) {
+export function FactionTable({ world, bar, onRename, onDelete, onAdd }: FactionTableProps) {
   const rows = world.factions.map((f) => {
     const sites = world.sites.filter((s) => s.faction === f.id);
     const units = world.units.filter((u) => u.faction === f.id);
     return {
       faction: f,
+      // 排序要用编号兜底（同名时），所以这一行自己也带一个 id。
+      id: f.id,
       sites: sites.length,
       units: units.length,
       troops: units.reduce((sum, u) => sum + u.troops, 0),
@@ -258,9 +402,13 @@ export function FactionTable({ world, onRename, onDelete, onAdd }: FactionTableP
       food: sites.reduce((sum, s) => sum + s.food, 0),
     };
   });
+  const total = rows.length;
+  const shown = pageRows(sortRows(rows, bar.sort ?? DEFAULT_SORT, (r) => r.faction.name), bar.page, bar.pageSize);
 
   return (
-    <table>
+    <>
+      <ListBar total={total} what="势力表" bar={bar} />
+      <table>
       <thead>
         <tr>
           <th>名字</th>
@@ -280,7 +428,7 @@ export function FactionTable({ world, onRename, onDelete, onAdd }: FactionTableP
             </td>
           </tr>
         ) : (
-          rows.map((r) => (
+          shown.map((r) => (
             <tr key={r.faction.id}>
               <td>
                 <input value={r.faction.name} onChange={(e) => onRename(r.faction.id, e.target.value)} />
@@ -304,12 +452,15 @@ export function FactionTable({ world, onRename, onDelete, onAdd }: FactionTableP
           </td>
         </tr>
       </tfoot>
-    </table>
+      </table>
+    </>
   );
 }
 
 interface SiteTableProps {
   world: World;
+  /** 表上方那一行：页码、每页条数、排序；数字格写不回去的理由也走它的 onNote。 */
+  bar: ListBarProps;
   onEdit: (id: number, patch: Partial<Site>) => void;
   /** 正在挑的起点据点；没有就是 null。 */
   startSite: number | null;
@@ -331,12 +482,11 @@ interface SiteTableProps {
   onEditLevel: (id: number, level: number) => void;
   /** 挑辖区：名字类，过滤输入框；与据点自己那个层级对不上时只在说明行提一句。 */
   onEditDivision: (id: number, division: number | null) => void;
-  /** 哪一格写了写不回去的值：把它报给说明行，值留在格子里等 User 自己改。 */
-  onNote: (message: string) => void;
 }
 
 export function SiteTable({
   world,
+  bar,
   onEdit,
   startSite,
   onPick,
@@ -348,18 +498,19 @@ export function SiteTable({
   onOnly,
   onEditLevel,
   onEditDivision,
-  onNote,
 }: SiteTableProps) {
   if (world.sites.length === 0) return <p className="dim">还没有据点。</p>;
 
   // 「只看某一支」：挑据点就收它那一棵（所属据点往下），挑辖区就收它名下那一整片；选「全部」时是 null。
   const branch =
     only === null ? null : only.kind === 'division' ? divisionSites(world, only.id) : siteBranch(world, only.id);
-  const rows = branch === null ? world.sites : world.sites.filter((s) => branch.has(s.id));
+  // 筛出来的那些（排序与翻页都在它之后做），计数说的是它有多少座，不是这一页有多少行。
+  const all = branch === null ? world.sites : world.sites.filter((s) => branch.has(s.id));
+  const rows = pageRows(sortRows(all, bar.sort ?? DEFAULT_SORT, (s) => s.name), bar.page, bar.pageSize);
 
   return (
     <>
-      <div className="row">
+      <ListBar total={all.length} what="据点表" bar={bar}>
         <NamePicker
           value={only === null ? '' : only.name}
           items={[
@@ -390,10 +541,10 @@ export function SiteTable({
               '「' +
               only.name +
               '」：' +
-              String(rows.length) +
+              String(all.length) +
               ' 座'}
         </span>
-      </div>
+      </ListBar>
       <table>
       <thead>
         <tr>
@@ -430,7 +581,7 @@ export function SiteTable({
                 label="发展度"
                 title="发展度 0–100，一位小数：钱粮产出与 upkeep 按它算，地图上记号的大小也按它。"
                 onCommit={(v) => onEdit(s.id, { development: v })}
-                onNote={onNote}
+                onNote={bar.onNote}
               />
             </td>
             <td>
@@ -442,7 +593,7 @@ export function SiteTable({
                 label="防御设施等级"
                 title="防御设施等级 0–10，一位小数。现在只由 User 声明，不参与结算（战斗还没做）。"
                 onCommit={(v) => onEdit(s.id, { fortification: v })}
-                onNote={onNote}
+                onNote={bar.onNote}
               />
             </td>
             <td>
@@ -558,6 +709,8 @@ export function SiteTable({
 
 interface DivisionTableProps {
   world: World;
+  /** 表上方那一行：页码、每页条数、排序。 */
+  bar: ListBarProps;
   onRename: (id: number, name: string) => void;
   onRank: (id: number, rank: number) => void;
   onParent: (id: number, parent: number | null) => void;
@@ -575,6 +728,7 @@ interface DivisionTableProps {
  */
 export function DivisionTable({
   world,
+  bar,
   onRename,
   onRank,
   onParent,
@@ -583,8 +737,12 @@ export function DivisionTable({
   onDelete,
   onAdd,
 }: DivisionTableProps) {
+  const rows = pageRows(sortRows(world.divisions, bar.sort ?? DEFAULT_SORT, (d) => d.name), bar.page, bar.pageSize);
+
   return (
-    <table>
+    <>
+      <ListBar total={world.divisions.length} what="辖区表" bar={bar} />
+      <table>
       <thead>
         <tr>
           <th>名字</th>
@@ -604,7 +762,7 @@ export function DivisionTable({
             </td>
           </tr>
         ) : null}
-        {world.divisions.map((d) => {
+        {rows.map((d) => {
           const siteCount = world.sites.filter((x) => x.division === d.id).length;
           const belowCount = world.divisions.filter((x) => x.parent === d.id).length;
           return (
@@ -661,12 +819,15 @@ export function DivisionTable({
           </td>
         </tr>
       </tfoot>
-    </table>
+      </table>
+    </>
   );
 }
 
 interface UnitTableProps {
   world: World;
+  /** 表上方那一行：页码、每页条数、排序。 */
+  bar: ListBarProps;
   onEdit: (id: number, patch: Partial<Unit>) => void;
   onOrder: (id: number, queue: Order[]) => void;
   /** 点「前往…」：进入在地图上挑目的地的状态。 */
@@ -679,11 +840,15 @@ interface UnitTableProps {
   onDelete: (id: number) => void;
 }
 
-export function UnitTable({ world, onEdit, onOrder, onPickDestination, pickingUnit, onLocate, onDelete }: UnitTableProps) {
+export function UnitTable({ world, bar, onEdit, onOrder, onPickDestination, pickingUnit, onLocate, onDelete }: UnitTableProps) {
   if (world.units.length === 0) return <p className="dim">还没有部队。</p>;
 
+  const rows = pageRows(sortRows(world.units, bar.sort ?? DEFAULT_SORT, (u) => u.name), bar.page, bar.pageSize);
+
   return (
-    <table>
+    <>
+      <ListBar total={world.units.length} what="部队表" bar={bar} />
+      <table>
       <thead>
         <tr>
           <th>名称</th>
@@ -698,7 +863,7 @@ export function UnitTable({ world, onEdit, onOrder, onPickDestination, pickingUn
         </tr>
       </thead>
       <tbody>
-        {world.units.map((u) => (
+        {rows.map((u) => (
           <tr key={u.id}>
             <td>
               <input value={u.name} onChange={(e) => onEdit(u.id, { name: e.target.value })} />
@@ -765,22 +930,30 @@ export function UnitTable({ world, onEdit, onOrder, onPickDestination, pickingUn
           </tr>
         ))}
       </tbody>
-    </table>
+      </table>
+    </>
   );
 }
 
 interface LinkTableProps {
   world: World;
+  /** 表上方那一行：页码、每页条数、排序（连接的名字是「A 城 — B 城」）。 */
+  bar: ListBarProps;
   onEdit: (id: number, patch: Partial<Link>) => void;
   /** 点「删除」（第二下）：这条连接上有部队行军或扎营时会被挡回来。 */
   onDelete: (id: number) => void;
 }
 
-export function LinkTable({ world, onEdit, onDelete }: LinkTableProps) {
+export function LinkTable({ world, bar, onEdit, onDelete }: LinkTableProps) {
   if (world.links.length === 0) return <p className="dim">还没有连接。</p>;
 
+  // 连接的名字是「A 城 — B 城」：按名称排用的就是它。
+  const rows = pageRows(sortRows(world.links, bar.sort ?? DEFAULT_SORT, (l) => linkName(world, l)), bar.page, bar.pageSize);
+
   return (
-    <table>
+    <>
+      <ListBar total={world.links.length} what="连接表" bar={bar} />
+      <table>
       <thead>
         <tr>
           <th>两端</th>
@@ -790,7 +963,7 @@ export function LinkTable({ world, onEdit, onDelete }: LinkTableProps) {
         </tr>
       </thead>
       <tbody>
-        {world.links.map((l) => {
+        {rows.map((l) => {
           const a = world.sites.find((s) => s.id === l.a)?.name ?? String(l.a);
           const b = world.sites.find((s) => s.id === l.b)?.name ?? String(l.b);
           return (
@@ -826,26 +999,31 @@ export function LinkTable({ world, onEdit, onDelete }: LinkTableProps) {
           );
         })}
       </tbody>
-    </table>
+      </table>
+    </>
   );
 }
 
 interface TerrainTableProps {
   world: World;
+  /** 表上方那一行：页码、每页条数、排序；数字格写不回去的理由也走它的 onNote。 */
+  bar: ListBarProps;
   onEdit: (id: number, patch: Partial<Terrain>) => void;
   onDelete: (id: number) => void;
   onAdd: () => void;
-  /** 哪一格写了写不回去的值：报给说明行，值留在格子里等 User 自己改。 */
-  onNote: (message: string) => void;
 }
 
 /**
  * 地貌表：一档一行，名字与四个数都由 User 自己填，想细分就多加几行。
  * 「用它的连接」是算出来的；有连接指着它就不许删（由 App 挡回来）。
  */
-export function TerrainTable({ world, onEdit, onDelete, onAdd, onNote }: TerrainTableProps) {
+export function TerrainTable({ world, bar, onEdit, onDelete, onAdd }: TerrainTableProps) {
+  const rows = pageRows(sortRows(world.terrains, bar.sort ?? DEFAULT_SORT, (t) => t.name), bar.page, bar.pageSize);
+
   return (
-    <table>
+    <>
+      <ListBar total={world.terrains.length} what="地貌表" bar={bar} />
+      <table>
       <thead>
         <tr>
           <th>名字</th>
@@ -858,7 +1036,7 @@ export function TerrainTable({ world, onEdit, onDelete, onAdd, onNote }: Terrain
         </tr>
       </thead>
       <tbody>
-        {world.terrains.map((t) => (
+        {rows.map((t) => (
           <tr key={t.id}>
             <td>
               <input value={t.name} onChange={(e) => onEdit(t.id, { name: e.target.value })} />
@@ -872,7 +1050,7 @@ export function TerrainTable({ world, onEdit, onDelete, onAdd, onNote }: Terrain
                 label={TERRAIN_RANGE.speed.label}
                 title="行军速度系数：平原 1、山地 0.55 这一类，越小越难走。下限 0.01——填 0 或负数会让行军天数变成无穷，部队就永远走不到。"
                 onCommit={(v) => onEdit(t.id, { speed: v })}
-                onNote={onNote}
+                onNote={bar.onNote}
               />
             </td>
             <td>
@@ -884,7 +1062,7 @@ export function TerrainTable({ world, onEdit, onDelete, onAdd, onNote }: Terrain
                 label={TERRAIN_RANGE.width.label}
                 title="战场宽度。战斗还没做，眼下没有读者，先把数填着。"
                 onCommit={(v) => onEdit(t.id, { width: v })}
-                onNote={onNote}
+                onNote={bar.onNote}
               />
             </td>
             <td>
@@ -896,7 +1074,7 @@ export function TerrainTable({ world, onEdit, onDelete, onAdd, onNote }: Terrain
                 label={TERRAIN_RANGE.defense.label}
                 title="守方加成，1 表示不加成。战斗还没做，眼下没有读者。"
                 onCommit={(v) => onEdit(t.id, { defense: v })}
-                onNote={onNote}
+                onNote={bar.onNote}
               />
             </td>
             <td>
@@ -908,7 +1086,7 @@ export function TerrainTable({ world, onEdit, onDelete, onAdd, onNote }: Terrain
                 label={TERRAIN_RANGE.food.label}
                 title="粮草产出系数，1 表示不加成。按地貌算粮草那一条还没做，眼下没有读者。"
                 onCommit={(v) => onEdit(t.id, { food: v })}
-                onNote={onNote}
+                onNote={bar.onNote}
               />
             </td>
             <td className="ro">{terrainLinks(world, t.id)} 条</td>
@@ -928,6 +1106,7 @@ export function TerrainTable({ world, onEdit, onDelete, onAdd, onNote }: Terrain
           </td>
         </tr>
       </tfoot>
-    </table>
+      </table>
+    </>
   );
 }

@@ -6,6 +6,18 @@ import { mulberry32 } from '../src/engine/rng.ts';
 import { dayOfMonth, isMonthEnd, marchDays, month, tickDay, year } from '../src/engine/tick.ts';
 import type { Place, Unit } from '../src/engine/types.ts';
 import {
+  emptyListStates,
+  isPageNumber,
+  LIST_LABEL,
+  newestFirst,
+  PAGE_LISTS,
+  pageCount,
+  pageOfRow,
+  pageRows,
+  sortRows,
+  tableRows,
+} from '../src/renderer/paging.ts';
+import {
   addDivision,
   addTerrain,
   demoWorld,
@@ -394,6 +406,72 @@ check('倍率落在命令上', o16.kind === 'offroad' && o16.factor === 0.4, o16
 check('目的地记得是那座据点', o16.kind === 'offroad' && o16.toSite === s16b.id);
 check('答完写了日志', w16.log.some((line) => line.includes('领命离开道路')));
 check('答完 pending 清空', w16.pending === null);
+
+console.log('\n== 翻页与排序 ==');
+// 六张表与日志共用 `src/renderer/paging.ts` 那一层。它是纯函数，所以在这里跑；
+// 页面那一头只负责把页码与排序按住，把每页几条从参数表里读出来。
+const anyWorld = demoWorld();
+const siteRows = tableRows(anyWorld, 'sites', null);
+check('据点表两行，顺序就是世界里的顺序', siteRows.length === 2 && siteRows[0]!.name === 'A 城', siteRows.map((r) => r.name).join('、'));
+check('连接那一行的名字是「A 城 — B 城」', tableRows(anyWorld, 'links', null)[0]!.name === 'A 城 — B 城', tableRows(anyWorld, 'links', null)[0]!.name);
+check('六张表各自的名字都在', PAGE_LISTS.length === 6 && LIST_LABEL.sites === '据点表' && LIST_LABEL.terrains === '地貌表');
+
+check('按编号升序：还是 A 城在前', sortRows(siteRows, { key: 'id', up: true }, (r) => r.name)[0]!.name === 'A 城');
+check('按编号降序：B 城在前', sortRows(siteRows, { key: 'id', up: false }, (r) => r.name)[0]!.name === 'B 城');
+// 中文按拼音比。按码点比的话「吴」（U+5434）会跑到「蜀」（U+8700）前面，拼音顺序是 蜀 < 魏 < 吴。
+const three = [
+  { id: 1, name: '魏' },
+  { id: 2, name: '蜀' },
+  { id: 3, name: '吴' },
+];
+const byName = sortRows(three, { key: 'name', up: true }, (r) => r.name).map((r) => r.name).join('');
+check('按名称排走拼音：蜀 魏 吴', byName === '蜀魏吴', byName);
+const byNameDown = sortRows(three, { key: 'name', up: false }, (r) => r.name).map((r) => r.name).join('');
+check('按名称倒序：吴 魏 蜀', byNameDown === '吴魏蜀', byNameDown);
+// 同名时按编号兜底，翻页时顺序不会跳。
+const twins = [
+  { id: 7, name: '城' },
+  { id: 3, name: '城' },
+];
+check('同名时按编号兜底', sortRows(twins, { key: 'name', up: true }, (r) => r.name).map((r) => r.id).join() === '3,7');
+check('同名倒序也按编号兜底', sortRows(twins, { key: 'name', up: false }, (r) => r.name).map((r) => r.id).join() === '7,3');
+check('排完不动原来那个数组', twins[0]!.id === 7 && twins[1]!.id === 3);
+
+// 分页与每页条数。
+const many = Array.from({ length: 120 }, (_, i) => ({ id: i + 1, name: '据点 ' + String(i + 1) }));
+check('120 条、每页 50 条是 3 页', pageCount(many.length, 50) === 3, String(pageCount(many.length, 50)));
+check('第 1 页是前 50 条', pageRows(many, 1, 50).length === 50 && pageRows(many, 1, 50)[0]!.id === 1);
+check('第 3 页是剩下那 20 条', pageRows(many, 3, 50).length === 20 && pageRows(many, 3, 50)[0]!.id === 101);
+check('一条都没有也算一页', pageCount(0, 50) === 1 && pageRows([], 1, 50).length === 0);
+check('每页填 0 或负数时按一条算', pageRows(many, 1, 0).length === 1 && pageCount(120, -5) === 120);
+check('页码格只收范围内的整数', isPageNumber('2', 3) && !isPageNumber('0', 3) && !isPageNumber('4', 3) && !isPageNumber('1.5', 3) && !isPageNumber('', 3));
+
+// 新增之后跳到那一行：它在排好序的列表里落在第几页。
+check('第 60 条落在第 2 页', pageOfRow(many, 60, 50) === 2);
+check('第 101 条落在第 3 页', pageOfRow(many, 101, 50) === 3);
+check('被筛掉的行返回 0', pageOfRow(many, 999, 50) === 0);
+
+// 据点表的「只看某一支」：这里算出来的行数与表里画的行数是同一个来源。
+const wBranch = demoWorld();
+const bA = wBranch.sites[0]!;
+const bB = wBranch.sites[1]!;
+bA.parent = bB.id;
+check('只看 B 那一支：两座', tableRows(wBranch, 'sites', { kind: 'site', id: bB.id }).length === 2);
+check('只看 A 那一支：一座', tableRows(wBranch, 'sites', { kind: 'site', id: bA.id }).length === 1);
+
+// 日志新的在上：第 1 页是最新的那几条，页内也是新的在上。
+const lines = ['1', '2', '3', '4', '5', '6', '7'];
+check('日志第 1 页是最新那三条，新的在上', newestFirst(lines, 1, 3).join('') === '765', newestFirst(lines, 1, 3).join(''));
+check('日志第 2 页接着往前', newestFirst(lines, 2, 3).join('') === '432');
+check('日志最后一页只剩一条', newestFirst(lines, 3, 3).join('') === '1');
+check('日志页码超出时给空数组', newestFirst(lines, 9, 3).length === 0);
+
+// 开窗口时每张表都在第 1 页、按编号升序。
+const listStates = emptyListStates();
+check(
+  '默认每张表都在第 1 页、按编号升序',
+  PAGE_LISTS.every((l) => listStates[l].page === 1 && listStates[l].sort.key === 'id' && listStates[l].sort.up),
+);
 
 console.log('\n== 存档往返 ==');
 const text = worldToJson(w4);
