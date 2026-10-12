@@ -14,9 +14,12 @@ import {
   pageCount,
   pageOfRow,
   pageRows,
+  rowNumber,
+  SORT_COLUMNS,
   sortRows,
   tableRows,
 } from '../src/renderer/paging.ts';
+import type { Row } from '../src/renderer/paging.ts';
 import {
   addDivision,
   addTerrain,
@@ -24,7 +27,9 @@ import {
   destinationName,
   divisionRankRefusal,
   divisionSites,
+  divisionTotals,
   divisionWouldCycle,
+  factionTotals,
   levelRefusal,
   linkLength,
   linkTerrain,
@@ -78,6 +83,19 @@ check(
   '连接的两端就是那两座城',
   (wL.a === wA.id && wL.b === wB.id) || (wL.a === wB.id && wL.b === wA.id),
 );
+// 势力表那一行的几个合计：名下的据点与部队、部队兵力之和、据点自存的金钱与粮草、据点人口之和。
+const ft = factionTotals(w, wA.faction);
+check(
+  '势力表的合计：据点 1、部队 1、兵力 500',
+  ft.sites === 1 && ft.units === 1 && ft.troops === 500,
+  String(ft.sites) + '／' + String(ft.units) + '／' + String(ft.troops),
+);
+check(
+  '势力表的钱与粮只算据点自存的（部队随身带的不算）',
+  ft.money === wA.money && ft.food === wA.food,
+  String(ft.money) + '／' + String(ft.food),
+);
+check('势力表的总人口是名下据点人口之和', ft.population === wA.population, String(ft.population));
 
 // 上级：自己不能当自己的上级；挂上去之后再反过来，就会连成一个环。
 const wp = demoWorld();
@@ -135,6 +153,25 @@ check(
   '据点层数高过辖区等级时只提醒不挡',
   siteDivisionNote(wd, sA.id, d2.id) !== null && siteDivisionNote(wd, sB.id, d1.id) === null,
 );
+// 辖区表那几列的合计：地盘含各级下级辖区，兵力只数驻军。
+const dt2 = divisionTotals(wd, d2.id);
+check(
+  '州那一行：地盘两座据点、人口是两座之和',
+  dt2.sites === 2 && dt2.population === sA.population + sB.population,
+  String(dt2.sites) + ' 座 / ' + String(dt2.population),
+);
+check(
+  '郡那一行只有自己那一座',
+  divisionTotals(wd, d1.id).sites === 1 && divisionTotals(wd, d1.id).population === sB.population,
+);
+check('地盘里的兵力只数驻扎在据点里的（甲队在 A 城，500）', dt2.troops === 500, String(dt2.troops));
+check(
+  '钱粮是地盘里各据点自存的加起来',
+  dt2.money === sA.money + sB.money && dt2.food === sA.food + sB.food,
+  String(dt2.money) + '／' + String(dt2.food),
+);
+wd.units[0]!.place = { kind: 'camp', x: 10, y: 10 };
+check('部队一离开据点，那一行的兵力就减掉', divisionTotals(wd, d2.id).troops === 0);
 
 console.log('\n== 日历 ==');
 const w2 = demoWorld();
@@ -416,29 +453,86 @@ check('据点表两行，顺序就是世界里的顺序', siteRows.length === 2 
 check('连接那一行的名字是「A 城 — B 城」', tableRows(anyWorld, 'links', null)[0]!.name === 'A 城 — B 城', tableRows(anyWorld, 'links', null)[0]!.name);
 check('六张表各自的名字都在', PAGE_LISTS.length === 6 && LIST_LABEL.sites === '据点表' && LIST_LABEL.terrains === '地貌表');
 
-check('按编号升序：还是 A 城在前', sortRows(siteRows, { key: 'id', up: true }, (r) => r.name)[0]!.name === 'A 城');
-check('按编号降序：B 城在前', sortRows(siteRows, { key: 'id', up: false }, (r) => r.name)[0]!.name === 'B 城');
+check('按编号升序：还是 A 城在前', sortRows(siteRows, { key: 'id', up: true })[0]!.name === 'A 城');
+check('按编号降序：B 城在前', sortRows(siteRows, { key: 'id', up: false })[0]!.name === 'B 城');
 // 中文按拼音比。按码点比的话「吴」（U+5434）会跑到「蜀」（U+8700）前面，拼音顺序是 蜀 < 魏 < 吴。
-const three = [
-  { id: 1, name: '魏' },
-  { id: 2, name: '蜀' },
-  { id: 3, name: '吴' },
+const three: Row[] = [
+  { id: 1, name: '魏', numbers: {} },
+  { id: 2, name: '蜀', numbers: {} },
+  { id: 3, name: '吴', numbers: {} },
 ];
-const byName = sortRows(three, { key: 'name', up: true }, (r) => r.name).map((r) => r.name).join('');
+const byName = sortRows(three, { key: 'name', up: true }).map((r) => r.name).join('');
 check('按名称排走拼音：蜀 魏 吴', byName === '蜀魏吴', byName);
-const byNameDown = sortRows(three, { key: 'name', up: false }, (r) => r.name).map((r) => r.name).join('');
+const byNameDown = sortRows(three, { key: 'name', up: false }).map((r) => r.name).join('');
 check('按名称倒序：吴 魏 蜀', byNameDown === '吴魏蜀', byNameDown);
 // 同名时按编号兜底，翻页时顺序不会跳。
-const twins = [
-  { id: 7, name: '城' },
-  { id: 3, name: '城' },
+const twins: Row[] = [
+  { id: 7, name: '城', numbers: {} },
+  { id: 3, name: '城', numbers: {} },
 ];
-check('同名时按编号兜底', sortRows(twins, { key: 'name', up: true }, (r) => r.name).map((r) => r.id).join() === '3,7');
-check('同名倒序也按编号兜底', sortRows(twins, { key: 'name', up: false }, (r) => r.name).map((r) => r.id).join() === '7,3');
+check('同名时按编号兜底', sortRows(twins, { key: 'name', up: true }).map((r) => r.id).join() === '3,7');
+check('同名倒序也按编号兜底', sortRows(twins, { key: 'name', up: false }).map((r) => r.id).join() === '7,3');
 check('排完不动原来那个数组', twins[0]!.id === 7 && twins[1]!.id === 3);
 
+// 数值列（点表头排的那几列）。第一下是大的在前，也就是 up: false。
+check('据点表按人口从大到小：A 城在前', sortRows(siteRows, { key: 'population', up: false })[0]!.name === 'A 城');
+check('据点表按人口从小到大：B 城在前', sortRows(siteRows, { key: 'population', up: true })[0]!.name === 'B 城');
+check(
+  '按驻军兵力排：有驻军的 A 城在前，那一列是 500',
+  sortRows(siteRows, { key: 'garrisonTroops', up: false })[0]!.name === 'A 城' &&
+    rowNumber(siteRows[0]!, 'garrisonTroops') === 500,
+  String(rowNumber(siteRows[0]!, 'garrisonTroops')),
+);
+// 数值相同时按编号兜底，翻页时顺序不会跳。
+const sameNumber: Row[] = [
+  { id: 9, name: '甲', numbers: { troops: 100 } },
+  { id: 4, name: '乙', numbers: { troops: 100 } },
+];
+check('数值相同时按编号兜底（降序里编号也倒过来）', sortRows(sameNumber, { key: 'troops', up: false }).map((r) => r.id).join() === '9,4');
+check('数值相同时升序里编号也升序', sortRows(sameNumber, { key: 'troops', up: true }).map((r) => r.id).join() === '4,9');
+// 势力与辖区的合计也在可排的列里。
+check(
+  '势力表按总人口排：魏（9000）在前',
+  sortRows(tableRows(anyWorld, 'factions', null), { key: 'population', up: false })[0]!.name === '魏',
+);
+const divRows = tableRows(wd, 'divisions', null);
+check(
+  '辖区表按地盘人口排：幽州在前',
+  sortRows(divRows, { key: 'population', up: false })[0]!.name === '幽州',
+  divRows.map((r) => r.name).join('、'),
+);
+check(
+  '辖区表按地盘据点排：幽州 2、辽东郡 1',
+  rowNumber(divRows.find((r) => r.name === '幽州')!, 'areaSites') === 2 &&
+    rowNumber(divRows.find((r) => r.name === '辽东郡')!, 'areaSites') === 1,
+);
+// 等级与两个坐标也是数值列（User 后来补定的三列）。
+check(
+  '辖区表按等级排：幽州（3）在前',
+  sortRows(divRows, { key: 'rank', up: false })[0]!.name === '幽州',
+  sortRows(divRows, { key: 'rank', up: false }).map((r) => r.name).join('、'),
+);
+check(
+  '据点表按坐标 x 从小到大：A 城（1000）在前',
+  sortRows(siteRows, { key: 'x', up: true })[0]!.name === 'A 城' &&
+    rowNumber(siteRows[0]!, 'x') === 1000,
+);
+
+// 表头列出的那些可排数值列，每一行都得有值——表头与 numbers 的键不会各写各的。
+let noValue = 0;
+for (const list of PAGE_LISTS) {
+  for (const row of tableRows(wd, list, null)) {
+    for (const col of SORT_COLUMNS[list]) if (typeof row.numbers[col.key] !== 'number') noValue += 1;
+  }
+}
+check('每一张表列出的可排数值列，每一行都有值', noValue === 0, String(noValue));
+
 // 分页与每页条数。
-const many = Array.from({ length: 120 }, (_, i) => ({ id: i + 1, name: '据点 ' + String(i + 1) }));
+const many: Row[] = Array.from({ length: 120 }, (_, i) => ({
+  id: i + 1,
+  name: '据点 ' + String(i + 1),
+  numbers: {},
+}));
 check('120 条、每页 50 条是 3 页', pageCount(many.length, 50) === 3, String(pageCount(many.length, 50)));
 check('第 1 页是前 50 条', pageRows(many, 1, 50).length === 50 && pageRows(many, 1, 50)[0]!.id === 1);
 check('第 3 页是剩下那 20 条', pageRows(many, 3, 50).length === 20 && pageRows(many, 3, 50)[0]!.id === 101);

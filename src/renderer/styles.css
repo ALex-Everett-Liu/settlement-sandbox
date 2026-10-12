@@ -179,6 +179,24 @@ th {
   white-space: nowrap;
 }
 
+/* 可点的表头：点一下按这一列排，再点一下换方向；选中的那一列写着箭头、颜色跟着强调色。
+   表头按钮不套 .tab，免得与「表上方那一行」两个按钮的配色互相盖。 */
+th button {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+th button.on {
+  color: var(--acc);
+}
+
 td input,
 td select {
   width: 100%;

@@ -20,6 +20,37 @@ export function addFaction(world: World, name: string): Faction {
   return f;
 }
 
+/**
+ * 一个势力的合计，势力表那一行写的几个数就是它：名下的据点与部队各几个、
+ * 这些部队的兵力加起来多少、这些据点自存的金钱与粮草各多少、这些据点的人口加起来多少。
+ * 部队随身带着的那份粮草不算进「粮」里——它跟着部队走，不跟着势力走。
+ */
+export interface FactionTotals {
+  sites: number;
+  units: number;
+  troops: number;
+  money: number;
+  food: number;
+  population: number;
+}
+
+export function factionTotals(world: World, id: Id): FactionTotals {
+  const totals: FactionTotals = { sites: 0, units: 0, troops: 0, money: 0, food: 0, population: 0 };
+  for (const s of world.sites) {
+    if (s.faction !== id) continue;
+    totals.sites += 1;
+    totals.money += s.money;
+    totals.food += s.food;
+    totals.population += s.population;
+  }
+  for (const u of world.units) {
+    if (u.faction !== id) continue;
+    totals.units += 1;
+    totals.troops += u.troops;
+  }
+  return totals;
+}
+
 export function addSite(world: World, site: Omit<Site, 'id'>): Site {
   const s: Site = { ...site, id: nextId(world.sites) };
   world.sites.push(s);
@@ -165,6 +196,20 @@ export function siteGarrison(world: World, site: Id): { count: number; troops: n
     troops += u.troops;
   }
   return { count, troops };
+}
+
+/**
+ * 每座据点的驻军兵力，一遍扫完。规则与 `siteGarrison` 同一条（位置是那座据点的部队才算驻军）：
+ * 单看一座用那个，整列排序或整张表要用这个——逐座调用那个会变成「据点乘部队」那么多遍。
+ */
+export function garrisonTroops(world: World): Map<Id, number> {
+  const out = new Map<Id, number>();
+  for (const u of world.units) {
+    if (u.place.kind !== 'site') continue;
+    const site = u.place.site;
+    out.set(site, (out.get(site) ?? 0) + u.troops);
+  }
+  return out;
 }
 
 /**
@@ -320,6 +365,36 @@ export function divisionSites(world: World, id: Id): Set<Id> {
     for (const d of world.divisions) if (d.parent === cur) stack.push(d.id);
   }
   return out;
+}
+
+/**
+ * 一个辖区地盘上的合计，辖区表那几列写的就是它。「地盘」含各级下级辖区名下的据点，
+ * 与治所那条规矩、据点表「只看某一支」同一套口径——所以州那一行把下属各郡的也算进去，
+ * 上下两级会有同一座据点的份（每一行写的是自己这一棵子树，不是只算本级）。
+ * 兵力只数驻扎在据点里的部队（据点表「驻军」那一列的口径）：行军与野营的都不算。
+ */
+export interface DivisionTotals {
+  /** 地盘里的据点数，含下级辖区名下的。 */
+  sites: number;
+  money: number;
+  food: number;
+  troops: number;
+  population: number;
+}
+
+export function divisionTotals(world: World, id: Id, garrison?: Map<Id, number>): DivisionTotals {
+  const mine = divisionSites(world, id);
+  // 一整张表要按行各算一遍时，调用方把 `garrisonTroops` 的结果传进来，省掉每行重扫一遍部队。
+  const held = garrison ?? garrisonTroops(world);
+  const totals: DivisionTotals = { sites: mine.size, money: 0, food: 0, troops: 0, population: 0 };
+  for (const s of world.sites) {
+    if (!mine.has(s.id)) continue;
+    totals.money += s.money;
+    totals.food += s.food;
+    totals.population += s.population;
+    totals.troops += held.get(s.id) ?? 0;
+  }
+  return totals;
 }
 
 /** 把 id 挂到 parent 下面会不会成环：沿上级辖区一路往上，能走回 id 就会。 */

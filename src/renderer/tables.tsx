@@ -5,18 +5,18 @@
 import { useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { Link, Order, Site, Terrain, Unit, World } from '../engine/types.ts';
-import {
-  divisionName,
-  divisionSites,
-  linkLength,
-  linkName,
-  siteBranch,
-  terrainLinks,
-  terrainName,
-} from '../engine/world.ts';
+import { divisionName, linkLength, terrainLinks, terrainName } from '../engine/world.ts';
 import { factionName, garrisonText, orderText, placeText, round1, round2, siteName } from './format.ts';
-import { DEFAULT_SORT, isPageNumber, pageCount, pageRows, sortRows } from './paging.ts';
-import type { Sort } from './paging.ts';
+import {
+  DEFAULT_SORT,
+  isPageNumber,
+  pageCount,
+  pageRows,
+  rowNumber,
+  sortRows,
+  tableRows,
+} from './paging.ts';
+import type { OnlyBranch, PageList, Row, Sort } from './paging.ts';
 
 /**
  * 地貌那四个数各自的上下限、小数位与中文名。越界的写法一律挡回来（见 App 的 terrainRefusal），
@@ -252,6 +252,63 @@ function ListBar({
 }
 
 /**
+ * 这一页要画的那几行（编号、名字与数值列）。排序与分页都在 paging.ts 那一层算，
+ * 与 App 找「新增那一行落在第几页」是同一份算法，所以表里看到的页就是跳过去的那一页。
+ */
+function pageOfRows(
+  world: World,
+  list: PageList,
+  only: OnlyBranch | null,
+  bar: ListBarProps,
+): { total: number; rows: Row[] } {
+  const rows = tableRows(world, list, only);
+  return { total: rows.length, rows: pageRows(sortRows(rows, bar.sort ?? DEFAULT_SORT), bar.page, bar.pageSize) };
+}
+
+/**
+ * 同上，再把编号换回对象，两样成对给出来（表里要画整个对象的那几张用它）。
+ * 成对是因为除了据点表与势力表，其余几张表的列都从对象上读，而排序用的列在 row 上。
+ */
+function pageOfObjects<T extends { id: number }>(
+  world: World,
+  list: PageList,
+  only: OnlyBranch | null,
+  bar: ListBarProps,
+  byId: Map<number, T>,
+): { total: number; page: { item: T; row: Row }[] } {
+  const { total, rows } = pageOfRows(world, list, only, bar);
+  const page: { item: T; row: Row }[] = [];
+  for (const row of rows) {
+    const item = byId.get(row.id);
+    if (item !== undefined) page.push({ item, row });
+  }
+  return { total, page };
+}
+
+/**
+ * 可点的表头：点一下按这一列排，再点一下换方向。数值列第一下是大的在前（与「按编号」「按名称」
+ * 第一下升序不同）——看人口、兵力、钱粮时通常是想看最多的那几行。
+ */
+function SortTh({ text, col, bar, title }: { text: string; col: string; bar: ListBarProps; title?: string }) {
+  const sort = bar.sort ?? DEFAULT_SORT;
+  const onSort = bar.onSort;
+  const active = sort.key === col;
+  if (onSort === undefined) return <th title={title}>{text}</th>;
+  return (
+    <th title={title}>
+      <button
+        className={active ? 'on' : undefined}
+        title="点一下按这一列排；再点一下换方向"
+        onClick={() => onSort({ key: col, up: active ? !sort.up : false })}
+      >
+        {text}
+        {active ? (sort.up ? ' ↑' : ' ↓') : ''}
+      </button>
+    </th>
+  );
+}
+
+/**
  * 候选列表里的一条。写回世界的是 id，名字只用来显示与过滤——
  * 名字允许重复，两处同名时按回车不写回，靠候选里跟着的编号分。
  */
@@ -388,22 +445,8 @@ interface FactionTableProps {
  * 表上方那一行按编号或名称排；每页几条由设置页签给。
  */
 export function FactionTable({ world, bar, onRename, onDelete, onAdd }: FactionTableProps) {
-  const rows = world.factions.map((f) => {
-    const sites = world.sites.filter((s) => s.faction === f.id);
-    const units = world.units.filter((u) => u.faction === f.id);
-    return {
-      faction: f,
-      // 排序要用编号兜底（同名时），所以这一行自己也带一个 id。
-      id: f.id,
-      sites: sites.length,
-      units: units.length,
-      troops: units.reduce((sum, u) => sum + u.troops, 0),
-      money: sites.reduce((sum, s) => sum + s.money, 0),
-      food: sites.reduce((sum, s) => sum + s.food, 0),
-    };
-  });
-  const total = rows.length;
-  const shown = pageRows(sortRows(rows, bar.sort ?? DEFAULT_SORT, (r) => r.faction.name), bar.page, bar.pageSize);
+  // 六个合计由引擎算（`factionTotals`，tableRows 里调），界面与自检用同一份算法。
+  const { total, rows } = pageOfRows(world, 'factions', null, bar);
 
   return (
     <>
@@ -412,34 +455,41 @@ export function FactionTable({ world, bar, onRename, onDelete, onAdd }: FactionT
       <thead>
         <tr>
           <th>名字</th>
-          <th>据点</th>
-          <th>部队</th>
-          <th>兵力</th>
-          <th>钱</th>
-          <th>粮</th>
+          <SortTh text="据点" col="sites" bar={bar} />
+          <SortTh text="部队" col="units" bar={bar} />
+          <SortTh text="兵力" col="troops" bar={bar} />
+          <SortTh text="钱" col="money" bar={bar} />
+          <SortTh text="粮" col="food" bar={bar} />
+          <SortTh
+            text="总人口"
+            col="population"
+            bar={bar}
+            title="这个势力名下各据点的人口加起来（部队本身不带人口）。"
+          />
           <th>删除</th>
         </tr>
       </thead>
       <tbody>
-        {rows.length === 0 ? (
+        {total === 0 ? (
           <tr>
-            <td className="ro" colSpan={7}>
+            <td className="ro" colSpan={8}>
               还没有势力。按下面那一行的「＋」新建一个。
             </td>
           </tr>
         ) : (
-          shown.map((r) => (
-            <tr key={r.faction.id}>
+          rows.map((r) => (
+            <tr key={r.id}>
               <td>
-                <input value={r.faction.name} onChange={(e) => onRename(r.faction.id, e.target.value)} />
+                <input value={r.name} onChange={(e) => onRename(r.id, e.target.value)} />
               </td>
-              <td className="ro">{r.sites}</td>
-              <td className="ro">{r.units}</td>
-              <td className="ro">{round1(r.troops)}</td>
-              <td className="ro">{round1(r.money)}</td>
-              <td className="ro">{round1(r.food)}</td>
+              <td className="ro">{rowNumber(r, 'sites')}</td>
+              <td className="ro">{rowNumber(r, 'units')}</td>
+              <td className="ro">{round1(rowNumber(r, 'troops'))}</td>
+              <td className="ro">{round1(rowNumber(r, 'money'))}</td>
+              <td className="ro">{round1(rowNumber(r, 'food'))}</td>
+              <td className="ro">{round1(rowNumber(r, 'population'))}</td>
               <td>
-                <DeleteButton what={'势力「' + r.faction.name + '」'} onConfirm={() => onDelete(r.faction.id)} />
+                <DeleteButton what={'势力「' + r.name + '」'} onConfirm={() => onDelete(r.id)} />
               </td>
             </tr>
           ))
@@ -447,7 +497,7 @@ export function FactionTable({ world, bar, onRename, onDelete, onAdd }: FactionT
       </tbody>
       <tfoot>
         <tr>
-          <td colSpan={7}>
+          <td colSpan={8}>
             <button onClick={onAdd}>＋ 新增势力</button>
           </td>
         </tr>
@@ -502,15 +552,14 @@ export function SiteTable({
   if (world.sites.length === 0) return <p className="dim">还没有据点。</p>;
 
   // 「只看某一支」：挑据点就收它那一棵（所属据点往下），挑辖区就收它名下那一整片；选「全部」时是 null。
-  const branch =
-    only === null ? null : only.kind === 'division' ? divisionSites(world, only.id) : siteBranch(world, only.id);
-  // 筛出来的那些（排序与翻页都在它之后做），计数说的是它有多少座，不是这一页有多少行。
-  const all = branch === null ? world.sites : world.sites.filter((s) => branch.has(s.id));
-  const rows = pageRows(sortRows(all, bar.sort ?? DEFAULT_SORT, (s) => s.name), bar.page, bar.pageSize);
+  // 筛选、排序与翻页都在 paging.ts 那一层做（见 tableRows），计数说的是筛完有多少座，不是这一页有多少行。
+  const onlyBranch: OnlyBranch | null = only === null ? null : { kind: only.kind, id: only.id };
+  const byId = new Map(world.sites.map((s) => [s.id, s]));
+  const { total, page } = pageOfObjects(world, 'sites', onlyBranch, bar, byId);
 
   return (
     <>
-      <ListBar total={all.length} what="据点表" bar={bar}>
+      <ListBar total={total} what="据点表" bar={bar}>
         <NamePicker
           value={only === null ? '' : only.name}
           items={[
@@ -541,7 +590,7 @@ export function SiteTable({
               '「' +
               only.name +
               '」：' +
-              String(all.length) +
+              String(total) +
               ' 座'}
         </span>
       </ListBar>
@@ -549,25 +598,35 @@ export function SiteTable({
       <thead>
         <tr>
           <th>名称</th>
-          <th>发展度</th>
-          <th>防御设施等级</th>
-          <th>人口</th>
-          <th>民心</th>
-          <th>稳定度</th>
-          <th>金钱</th>
-          <th>粮草</th>
+          <SortTh text="发展度" col="development" bar={bar} title="钱粮产出与 upkeep 按它算，地图上记号的大小也按它。" />
+          <SortTh
+            text="防御设施等级"
+            col="fortification"
+            bar={bar}
+            title="现在只由 User 声明，不参与结算（战斗还没做）。"
+          />
+          <SortTh text="人口" col="population" bar={bar} />
+          <SortTh text="民心" col="morale" bar={bar} />
+          <SortTh text="稳定度" col="stability" bar={bar} />
+          <SortTh text="金钱" col="money" bar={bar} />
+          <SortTh text="粮草" col="food" bar={bar} />
           <th>势力</th>
           <th>所属据点</th>
           <th>层级</th>
           <th>辖区</th>
-          <th>驻军</th>
-          <th>坐标 x</th>
-          <th>坐标 y</th>
+          <SortTh
+            text="驻军"
+            col="garrisonTroops"
+            bar={bar}
+            title="位置在这座据点的部队：支数 · 兵力合计。按这一列排用的是兵力合计。"
+          />
+          <SortTh text="坐标 x" col="x" bar={bar} />
+          <SortTh text="坐标 y" col="y" bar={bar} />
           <th>地图</th>
         </tr>
       </thead>
       <tbody>
-        {rows.map((s) => (
+        {page.map(({ item: s }) => (
           <tr key={s.id}>
             <td>
               <input value={s.name} onChange={(e) => onEdit(s.id, { name: e.target.value })} />
@@ -725,6 +784,8 @@ interface DivisionTableProps {
 /**
  * 辖区表：一片地方的行政归属。等级只约束辖区之间；治所是一个据点，随时可迁。
  * 名字能改，等级与上级辖区能就地改，末尾一列删除（要按两下）。
+ * 「据点」那一列是直接挂在这个辖区名下的个数；「地盘据点」与钱、粮、兵力、人口
+ * 四列按整棵子树算（含下级各级辖区名下的据点），兵力只数驻扎在地盘里的部队。
  */
 export function DivisionTable({
   world,
@@ -737,34 +798,53 @@ export function DivisionTable({
   onDelete,
   onAdd,
 }: DivisionTableProps) {
-  const rows = pageRows(sortRows(world.divisions, bar.sort ?? DEFAULT_SORT, (d) => d.name), bar.page, bar.pageSize);
+  const byId = new Map(world.divisions.map((d) => [d.id, d]));
+  const { total, page } = pageOfObjects(world, 'divisions', null, bar, byId);
 
   return (
     <>
-      <ListBar total={world.divisions.length} what="辖区表" bar={bar} />
+      <ListBar total={total} what="辖区表" bar={bar} />
       <table>
       <thead>
         <tr>
           <th>名字</th>
-          <th>等级</th>
+          <SortTh text="等级" col="rank" bar={bar} title="等级只约束辖区之间：上级不低于它、下级不高于它。" />
           <th>上级辖区</th>
           <th>治所</th>
-          <th>据点</th>
-          <th>下级辖区</th>
+          <SortTh text="据点" col="sites" bar={bar} title="直接挂在这个辖区名下的据点个数。" />
+          <SortTh
+            text="地盘据点"
+            col="areaSites"
+            bar={bar}
+            title="含各级下级辖区名下的据点——整棵子树里的据点数。"
+          />
+          <SortTh text="下级辖区" col="below" bar={bar} />
+          <SortTh
+            text="钱"
+            col="money"
+            bar={bar}
+            title="地盘里各据点自存的金钱加起来（部队随身带的不算）。"
+          />
+          <SortTh text="粮" col="food" bar={bar} title="地盘里各据点自存的粮草加起来。" />
+          <SortTh
+            text="兵力"
+            col="troops"
+            bar={bar}
+            title="只数驻扎在地盘里的部队，与据点表「驻军」那一列同一个口径；行军与野营的不算。"
+          />
+          <SortTh text="总人口" col="population" bar={bar} title="地盘里各据点的人口加起来。" />
           <th>删除</th>
         </tr>
       </thead>
       <tbody>
-        {world.divisions.length === 0 ? (
+        {total === 0 ? (
           <tr>
-            <td className="ro" colSpan={7}>
+            <td className="ro" colSpan={12}>
               还没有辖区。
             </td>
           </tr>
         ) : null}
-        {rows.map((d) => {
-          const siteCount = world.sites.filter((x) => x.division === d.id).length;
-          const belowCount = world.divisions.filter((x) => x.parent === d.id).length;
+        {page.map(({ item: d, row }) => {
           return (
             <tr key={d.id}>
               <td>
@@ -803,8 +883,13 @@ export function DivisionTable({
                   <div className="dim small">在地图上点一个据点作治所（Esc 或点空白处取消）</div>
                 ) : null}
               </td>
-              <td className="ro">{siteCount}</td>
-              <td className="ro">{belowCount}</td>
+              <td className="ro">{rowNumber(row, 'sites')}</td>
+              <td className="ro">{rowNumber(row, 'areaSites')}</td>
+              <td className="ro">{rowNumber(row, 'below')}</td>
+              <td className="ro">{round1(rowNumber(row, 'money'))}</td>
+              <td className="ro">{round1(rowNumber(row, 'food'))}</td>
+              <td className="ro">{round1(rowNumber(row, 'troops'))}</td>
+              <td className="ro">{round1(rowNumber(row, 'population'))}</td>
               <td>
                 <DeleteButton what={'辖区「' + d.name + '」'} onConfirm={() => onDelete(d.id)} />
               </td>
@@ -814,7 +899,7 @@ export function DivisionTable({
       </tbody>
       <tfoot>
         <tr>
-          <td colSpan={7}>
+          <td colSpan={12}>
             <button onClick={onAdd}>＋ 新增辖区</button>
           </td>
         </tr>
@@ -843,27 +928,28 @@ interface UnitTableProps {
 export function UnitTable({ world, bar, onEdit, onOrder, onPickDestination, pickingUnit, onLocate, onDelete }: UnitTableProps) {
   if (world.units.length === 0) return <p className="dim">还没有部队。</p>;
 
-  const rows = pageRows(sortRows(world.units, bar.sort ?? DEFAULT_SORT, (u) => u.name), bar.page, bar.pageSize);
+  const byId = new Map(world.units.map((u) => [u.id, u]));
+  const { total, page } = pageOfObjects(world, 'units', null, bar, byId);
 
   return (
     <>
-      <ListBar total={world.units.length} what="部队表" bar={bar} />
+      <ListBar total={total} what="部队表" bar={bar} />
       <table>
       <thead>
         <tr>
           <th>名称</th>
           <th>势力</th>
-          <th>兵力</th>
-          <th>训练度</th>
-          <th>组织度</th>
+          <SortTh text="兵力" col="troops" bar={bar} />
+          <SortTh text="训练度" col="training" bar={bar} />
+          <SortTh text="组织度" col="organization" bar={bar} />
           <th>位置</th>
-          <th>随身粮草</th>
+          <SortTh text="随身粮草" col="carriedFood" bar={bar} />
           <th>命令</th>
           <th>地图</th>
         </tr>
       </thead>
       <tbody>
-        {rows.map((u) => (
+        {page.map(({ item: u }) => (
           <tr key={u.id}>
             <td>
               <input value={u.name} onChange={(e) => onEdit(u.id, { name: e.target.value })} />
@@ -947,23 +1033,24 @@ interface LinkTableProps {
 export function LinkTable({ world, bar, onEdit, onDelete }: LinkTableProps) {
   if (world.links.length === 0) return <p className="dim">还没有连接。</p>;
 
-  // 连接的名字是「A 城 — B 城」：按名称排用的就是它。
-  const rows = pageRows(sortRows(world.links, bar.sort ?? DEFAULT_SORT, (l) => linkName(world, l)), bar.page, bar.pageSize);
+  // 连接的名字是「A 城 — B 城」（tableRows 里取的），所以「按名称」排的就是它。
+  const byId = new Map(world.links.map((l) => [l.id, l]));
+  const { total, page } = pageOfObjects(world, 'links', null, bar, byId);
 
   return (
     <>
-      <ListBar total={world.links.length} what="连接表" bar={bar} />
+      <ListBar total={total} what="连接表" bar={bar} />
       <table>
       <thead>
         <tr>
           <th>两端</th>
-          <th>长度</th>
-          <th>绕行系数</th>
+          <SortTh text="长度" col="length" bar={bar} title="两端直线距离 × 绕行系数。" />
+          <SortTh text="绕行系数" col="detour" bar={bar} />
           <th>地貌</th>
         </tr>
       </thead>
       <tbody>
-        {rows.map((l) => {
+        {page.map(({ item: l }) => {
           const a = world.sites.find((s) => s.id === l.a)?.name ?? String(l.a);
           const b = world.sites.find((s) => s.id === l.b)?.name ?? String(l.b);
           return (
@@ -1018,25 +1105,31 @@ interface TerrainTableProps {
  * 「用它的连接」是算出来的；有连接指着它就不许删（由 App 挡回来）。
  */
 export function TerrainTable({ world, bar, onEdit, onDelete, onAdd }: TerrainTableProps) {
-  const rows = pageRows(sortRows(world.terrains, bar.sort ?? DEFAULT_SORT, (t) => t.name), bar.page, bar.pageSize);
+  const byId = new Map(world.terrains.map((t) => [t.id, t]));
+  const { total, page } = pageOfObjects(world, 'terrains', null, bar, byId);
 
   return (
     <>
-      <ListBar total={world.terrains.length} what="地貌表" bar={bar} />
+      <ListBar total={total} what="地貌表" bar={bar} />
       <table>
       <thead>
         <tr>
           <th>名字</th>
-          <th>行军速度系数</th>
-          <th>战场宽度</th>
-          <th>守方加成</th>
-          <th>粮草产出系数</th>
+          <SortTh
+            text="行军速度系数"
+            col="speed"
+            bar={bar}
+            title="平原 1、山地 0.55 这一类，越小越难走。下限 0.01——填 0 或负数会让行军天数变成无穷。"
+          />
+          <SortTh text="战场宽度" col="width" bar={bar} title="战斗还没做，眼下没有读者，先把数填着。" />
+          <SortTh text="守方加成" col="defense" bar={bar} title="1 表示不加成。战斗还没做，眼下没有读者。" />
+          <SortTh text="粮草产出系数" col="food" bar={bar} title="1 表示不加成。按地貌算粮草那一条还没做，眼下没有读者。" />
           <th>用它的连接</th>
           <th>删除</th>
         </tr>
       </thead>
       <tbody>
-        {rows.map((t) => (
+        {page.map(({ item: t }) => (
           <tr key={t.id}>
             <td>
               <input value={t.name} onChange={(e) => onEdit(t.id, { name: e.target.value })} />

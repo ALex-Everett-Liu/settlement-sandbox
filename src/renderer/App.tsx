@@ -169,7 +169,7 @@ export function App() {
       const w = worldRef.current;
       if (!w) return 0;
       const branch = onlySite === null ? null : { kind: onlySite.kind, id: onlySite.id };
-      const rows = sortRows(tableRows(w, list, branch), lists[list].sort, (r) => r.name);
+      const rows = sortRows(tableRows(w, list, branch), lists[list].sort);
       const page = pageOfRow(rows, id, params.pageSize);
       if (page > 0) setLists((s) => ({ ...s, [list]: { ...s[list], page } }));
       return page;
