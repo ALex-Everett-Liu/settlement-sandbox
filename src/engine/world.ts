@@ -75,6 +75,53 @@ export function otherEnd(link: Link, from: Id): Id {
   return link.a === from ? link.b : link.a;
 }
 
+// —— 部队的位置与驻军 ——
+
+/**
+ * 部队当前在哪一点。在据点里就用那座据点的坐标，停着就用存下来的坐标，
+ * 走路就按进度插值。地图、浮层与「定位」都走它，所以只有这一处算坐标。
+ * 据点或连接找不到时返回 null：那一处数据互相冲突，画不出来也走不了。
+ */
+export function unitPoint(world: World, u: Unit): { x: number; y: number } | null {
+  const p = u.place;
+  if (p.kind === 'site') {
+    const s = siteById(world, p.site);
+    return s ? { x: s.x, y: s.y } : null;
+  }
+  if (p.kind === 'camp') return { x: p.x, y: p.y };
+  if (p.kind === 'offroad') {
+    return { x: p.fromX + (p.toX - p.fromX) * p.t, y: p.fromY + (p.toY - p.fromY) * p.t };
+  }
+  const a = siteById(world, p.from);
+  const b = siteById(world, p.to);
+  return a && b ? { x: a.x + (b.x - a.x) * p.t, y: a.y + (b.y - a.y) * p.t } : null;
+}
+
+/**
+ * 一座据点的驻军：位置是这座据点的那些部队，外加它们的兵力合计。
+ * 据点浮层、据点表与「删除据点」那条挡路条件都用它，免得三处各数一遍。
+ */
+export function siteGarrison(world: World, site: Id): { count: number; troops: number } {
+  let count = 0;
+  let troops = 0;
+  for (const u of world.units) {
+    if (u.place.kind !== 'site' || u.place.site !== site) continue;
+    count += 1;
+    troops += u.troops;
+  }
+  return { count, troops };
+}
+
+/**
+ * 「到哪里去」怎么写：目的地是一座据点就写它的名字，否则写那一点坐标（留两位小数）。
+ * 日志、说明行与队列那一行都用它。
+ */
+export function destinationName(world: World, toSite: Id | null, x: number, y: number): string {
+  if (toSite !== null) return siteName(world, toSite);
+  const r = (v: number) => String(Math.round(v * 100) / 100);
+  return '（' + r(x) + ', ' + r(y) + '）';
+}
+
 /**
  * 把 id 挂到 parent 下面会不会成环：沿上级一路往上，能走回 id 就会。
  * seen 记走过的据点：库里要是已经有一个环，也不再绕圈，直接当成会成环挡回去。

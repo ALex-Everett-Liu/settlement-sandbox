@@ -4,7 +4,7 @@
 import { useRef, useState } from 'react';
 import type { Link, Order, Site, Terrain, Unit, World } from '../engine/types.ts';
 import { divisionName, divisionSites, linkLength, siteBranch } from '../engine/world.ts';
-import { factionName, orderText, placeText, round2, siteName, TERRAIN_LABEL, TERRAINS } from './format.ts';
+import { factionName, garrisonText, orderText, placeText, round2, siteName, TERRAIN_LABEL, TERRAINS } from './format.ts';
 
 function toNumber(text: string, fallback: number): number {
   if (text.trim() === '') return fallback;
@@ -340,6 +340,7 @@ export function SiteTable({
           <th>所属据点</th>
           <th>层级</th>
           <th>辖区</th>
+          <th>驻军</th>
           <th>坐标 x</th>
           <th>坐标 y</th>
           <th>地图</th>
@@ -434,6 +435,9 @@ export function SiteTable({
                 emptyPick={{ id: 0, name: '（无）' }}
                 onPick={(item) => onEditDivision(s.id, item.id === 0 ? null : item.id)}
               />
+            </td>
+            <td className="ro" title="位置在这座据点的部队：支数 · 兵力合计。地图上不给它们画记号。">
+              {garrisonText(world, s.id)}
             </td>
             <td>
               <input
@@ -661,7 +665,9 @@ export function UnitTable({ world, onEdit, onOrder, onPickDestination, pickingUn
               </div>
               <div className="dim small">{orderText(world, u)}</div>
               {pickingUnit === u.id ? (
-                <div className="dim small">在地图上点一个据点作目的地（Esc 或点空白处取消）</div>
+                <div className="dim small">
+                  在地图上点一个据点作目的地；按住 Shift 点空白处挑一个野地坐标（Esc 或点空白处取消）
+                </div>
               ) : null}
             </td>
             <td>

@@ -8,14 +8,31 @@ export type Terrain = 'plain' | 'hill' | 'mountain' | 'water' | 'pass';
 /** 断粮时的处理方式（设计 §五 第 11 条）。每支部队各记各的。 */
 export type FoodPolicy = 'attrition' | 'forage' | 'restrict';
 
-/** 部队在哪：据点里、连接上行军、连接上扎营。 */
+/** 部队在哪：据点里、连接上行军、据点之外停着、离开道路行军。 */
 export type Place =
   | { kind: 'site'; site: Id }
   | { kind: 'march'; link: Id; from: Id; to: Id; t: number }
-  | { kind: 'camp'; link: Id; from: Id; to: Id; t: number };
+  /** 停在据点之外的某一点。当道扎营与野外扎营都是它，区别只在这个坐标落不落在连接上。 */
+  | { kind: 'camp'; x: number; y: number }
+  /** 离开道路行军：从一点直线走到另一点。速度按 factor 那一个倍率算，不读任何连接的地貌。 */
+  | {
+      kind: 'offroad';
+      fromX: number;
+      fromY: number;
+      toX: number;
+      toY: number;
+      /** 目的地是一座据点时就记它的编号，抵达即进城；为空就是停在那个坐标上。 */
+      toSite: Id | null;
+      t: number;
+      /** 相对道路速度的倍率：下命令那一刻由 User 给，字面就是道路的几成。 */
+      factor: number;
+    };
 
-/** 队列里的一条命令。目前只有「继续走」与「原地待命」。 */
-export type Order = { kind: 'hold' } | { kind: 'march'; to: Id };
+/** 队列里的一条命令。目前有「继续走」「原地待命」「离开道路走到一个坐标」。 */
+export type Order =
+  | { kind: 'hold' }
+  | { kind: 'march'; to: Id }
+  | { kind: 'offroad'; toSite: Id | null; toX: number; toY: number; factor: number };
 
 /** 一个选项：value 写回世界，label 给人看。 */
 export interface AskOption {
@@ -24,7 +41,14 @@ export interface AskOption {
 }
 
 /** 答案写回哪一处。每一种问询都知道自己改哪个字段。 */
-export type AskTarget = { kind: 'linkTerrain'; link: Id } | { kind: 'unitFoodPolicy'; unit: Id };
+export type AskTarget =
+  | { kind: 'linkTerrain'; link: Id }
+  | { kind: 'unitFoodPolicy'; unit: Id }
+  /**
+   * 离开道路那一趟的代价：答案是 User 填的一个倍率，答完把整条队列换成那一条新命令
+   * （与「前往…」同一条规矩：命令列上按一次换掉整条队列）。
+   */
+  | { kind: 'unitOffroadOrder'; unit: Id; toSite: Id | null; toX: number; toY: number };
 
 /** 引擎停下来问 User 的一件事。 */
 export interface Ask {

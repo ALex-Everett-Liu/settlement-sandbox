@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { answerAsk } from '../engine/ask.ts';
+import { answerAsk, askOffroadFactor } from '../engine/ask.ts';
 import { DEFAULT_PARAMS } from '../engine/params.ts';
 import { dayOfMonth, month, tickDay, year } from '../engine/tick.ts';
 import type { Link, Order, Params, Site, Theme, Unit, World } from '../engine/types.ts';
@@ -456,8 +456,11 @@ export function App() {
       if (below > 0) why.push('有 ' + String(below) + ' 座据点认它当上级');
       const heading = w.units.filter((u) => {
         const p = u.place;
-        const onTheWay = (p.kind === 'march' || p.kind === 'camp') && p.to === id;
-        return onTheWay || u.queue.some((o) => o.kind === 'march' && o.to === id);
+        const onTheWay = (p.kind === 'march' && p.to === id) || (p.kind === 'offroad' && p.toSite === id);
+        return (
+          onTheWay ||
+          u.queue.some((o) => (o.kind === 'march' && o.to === id) || (o.kind === 'offroad' && o.toSite === id))
+        );
       }).length;
       if (heading > 0) why.push('有 ' + String(heading) + ' 支部队正朝它去');
       if (why.length > 0) {
@@ -487,6 +490,10 @@ export function App() {
         setNote('「' + u.name + '」断粮怎么办那一问还挂着，先答完或取消，再删');
         return;
       }
+      if (t !== null && t.kind === 'unitOffroadOrder' && t.unit === id) {
+        setNote('「' + u.name + '」离开道路那一问还挂着（填一个倍率），先答完或取消，再删');
+        return;
+      }
       w.units = w.units.filter((x) => x.id !== id);
       if (orderTarget === id) setOrderTarget(0);
       commit(w);
@@ -510,10 +517,11 @@ export function App() {
       }
       const on = w.units.filter((u) => {
         const p = u.place;
-        return (p.kind === 'march' || p.kind === 'camp') && p.link === id;
+        // 只有连接上行军那一种位置挂在某条连接上；停在野地里、离开道路行军都不占连接。
+        return p.kind === 'march' && p.link === id;
       }).length;
       if (on > 0) {
-        setNote('这条连接上有 ' + String(on) + ' 支部队在行军或扎营，先让它们走开，再删');
+        setNote('这条连接上有 ' + String(on) + ' 支部队在行军，先让它们走开，再删');
         return;
       }
       w.links = w.links.filter((x) => x.id !== id);
@@ -574,12 +582,12 @@ export function App() {
     setView('map');
   }, []);
 
-  /** 点「前往…」：等一次地图上的点选，选中哪个据点就是目的地。 */
+  /** 点「前往…」：等一次地图上的点选。点据点是去那座据点，按住 Shift 点空白处是去那个坐标。 */
   const startOrderPick = useCallback((unitId: number) => {
     setLinkFrom(0);
     setParentTarget(0);
     setOrderTarget(unitId);
-    setNote('挑目的地：在地图上点一个据点（Esc 或点空白处取消）');
+    setNote('挑目的地：在地图上点一个据点，或按住 Shift 点一处野地（Esc 或点空白处取消）');
   }, []);
 
   /** 点「挂到…」：等一次地图上的点选，选中哪个据点就是它的上级。 */
@@ -641,9 +649,23 @@ export function App() {
       }
       if (orderTarget !== 0) {
         const u = w.units.find((x) => x.id === orderTarget);
-        editQueue(orderTarget, [{ kind: 'march', to: id }]);
-        setNote((u ? u.name : '部队 ' + String(orderTarget)) + ' 前往 ' + siteName(w, id));
-        if (api) void api.saveWorld(w);
+        if (!u) {
+          setOrderTarget(0);
+          return;
+        }
+        const s = w.sites.find((x) => x.id === id);
+        // 在据点里出发就走那条连接；已经停在据点之外的，这一趟只能离开道路过去，
+        // 于是先问 User 一个倍率——数由 User 定，引擎不替他挑一个。
+        if (u.place.kind === 'site' || !s) {
+          editQueue(orderTarget, [{ kind: 'march', to: id }]);
+          setNote(u.name + ' 前往 ' + siteName(w, id));
+          if (api) void api.saveWorld(w);
+        } else {
+          w.pending = askOffroadFactor(u.name + ' 要离开道路去 ' + s.name, u, { toSite: id, toX: s.x, toY: s.y });
+          commit(w);
+          setNote(u.name + ' 前往 ' + s.name + '：这一趟离开道路，填一个倍率');
+          if (api) void api.saveWorld(w);
+        }
         setOrderTarget(0);
         return;
       }
@@ -661,6 +683,29 @@ export function App() {
       setLinkFrom(0);
     },
     [linkFrom, orderTarget, parentTarget, seatTarget, addLinkBetween, editQueue, commit],
+  );
+
+  /**
+   * 按住 Shift 在地图上点了一处空白：把那个坐标当作目的地。
+   * 这一趟是离开道路走的，所以先停下来问 User 一个倍率，答完那一条命令才进队列
+   * （与「前往…」同一条规矩：命令列上按一次换掉整条队列）。
+   */
+  const pickPoint = useCallback(
+    (x: number, y: number) => {
+      const w = worldRef.current;
+      if (!w || orderTarget === 0) return;
+      const u = w.units.find((v) => v.id === orderTarget);
+      if (!u) {
+        setOrderTarget(0);
+        return;
+      }
+      w.pending = askOffroadFactor(u.name + ' 要离开道路', u, { toSite: null, toX: x, toY: y });
+      commit(w);
+      setNote(u.name + ' 这一趟离开道路：填一个倍率（相对道路速度）');
+      if (api) void api.saveWorld(w);
+      setOrderTarget(0);
+    },
+    [orderTarget, commit],
   );
 
   const cancelPick = useCallback(() => {
@@ -693,6 +738,16 @@ export function App() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [linkFrom, orderTarget, parentTarget, seatTarget, cancelPick]);
+
+  /**
+   * 正在挑目的地的那支部队要是驻军，它在地图上没有自己的记号，所以把「正在挑」那一圈
+   * 套在它所在的那座据点上。
+   */
+  const orderGarrisonSite = (() => {
+    if (world === null || orderTarget === 0) return null;
+    const u = world.units.find((x) => x.id === orderTarget);
+    return u && u.place.kind === 'site' ? u.place.site : null;
+  })();
 
   const calendar = world
     ? '第 ' + year(world, params) + ' 年 ' + month(world, params) + ' 月 ' + dayOfMonth(world, params) + ' 日'
@@ -761,7 +816,15 @@ export function App() {
                 params={params}
                 theme={theme}
                 visible={view === 'map'}
-                startSite={parentTarget !== 0 ? parentTarget : linkFrom === 0 ? null : linkFrom}
+                startSite={
+                  parentTarget !== 0
+                    ? parentTarget
+                    : orderGarrisonSite !== null
+                      ? orderGarrisonSite
+                      : linkFrom === 0
+                        ? null
+                        : linkFrom
+                }
                 pickUnit={orderTarget === 0 ? null : orderTarget}
                 focus={focus}
                 pickHint={
@@ -770,13 +833,14 @@ export function App() {
                     : parentTarget !== 0
                       ? '挑上级：在地图上点一个据点，Esc 或点空白处取消'
                       : orderTarget !== 0
-                        ? '挑目的地：在地图上点一个据点，Esc 或点空白处取消'
+                        ? '挑目的地：点一个据点，或按住 Shift 点一处野地，Esc 或点空白处取消'
                         : linkFrom !== 0
                           ? '起点：' + siteName(world, linkFrom) + ' · 再点一个据点作终点，Esc 或点空白处取消'
                           : null
                 }
                 onAddSite={addSiteAt}
                 onPickSite={pickSite}
+                onPickPoint={pickPoint}
                 onCancelPick={cancelPick}
               />
             </div>
@@ -858,15 +922,18 @@ function AskBox({ world, onAnswer }: { world: World; onAnswer: (value: string) =
         <h3>引擎停住了，等一个回答</h3>
         <p className="dim small">{ask.subject}</p>
         <p>{ask.question}</p>
-        <div className="row">
-          {ask.options.map((o) => (
-            <button key={o.value} className={value === o.value ? 'tab active' : 'tab'} onClick={() => setValue(o.value)}>
-              {o.label}
-            </button>
-          ))}
-        </div>
+        {ask.options.length > 0 ? (
+          <div className="row">
+            {ask.options.map((o) => (
+              <button key={o.value} className={value === o.value ? 'tab active' : 'tab'} onClick={() => setValue(o.value)}>
+                {o.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
         <div className="row">
           <input
+            autoFocus
             value={value}
             onChange={(e) => setValue(e.target.value)}
             onKeyDown={(e) => {
@@ -877,7 +944,11 @@ function AskBox({ world, onAnswer }: { world: World; onAnswer: (value: string) =
             就这样
           </button>
         </div>
-        <p className="dim small">默认值是「{fallbackLabel}」，也可以自己填一个值。</p>
+        {fallbackLabel === '' ? (
+          <p className="dim small">没有默认值，这个数由 User 自己定。</p>
+        ) : (
+          <p className="dim small">默认值是「{fallbackLabel}」，也可以自己填一个值。</p>
+        )}
       </div>
     </div>
   );

@@ -1,7 +1,7 @@
-import type { Params, Unit, World } from './types.ts';
+import type { Order, Params, Unit, World } from './types.ts';
 import { askFoodPolicy, askLinkTerrain } from './ask.ts';
 import { FOOD_POLICY_LABEL } from './labels.ts';
-import { linkBetween, linkById, linkLength, otherEnd, siteName } from './world.ts';
+import { destinationName, linkBetween, linkById, linkLength, otherEnd, siteById, siteName } from './world.ts';
 
 export function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
@@ -59,11 +59,40 @@ export function marchDays(u: Unit, distance: number, terrainFactor: number, p: P
 
 function startQueuedMoves(world: World, p: Params): void {
   for (const u of world.units) {
-    if (u.place.kind !== 'site' || u.queue.length === 0) continue;
+    const here = u.place;
+    // 队列只在据点里与扎营时启动；行军中不启动，所以路上的部队改不了目的地。
+    if (here.kind !== 'site' && here.kind !== 'camp') continue;
+    if (u.queue.length === 0) continue;
     const order = u.queue[0];
-    if (!order || order.kind !== 'march') continue;
+    if (!order || order.kind === 'hold') continue;
 
-    const from = u.place.site;
+    const origin = here.kind === 'site' ? siteById(world, here.site) : here;
+    if (!origin) {
+      u.queue.shift();
+      world.log.push(`第 ${world.day} 天：${u.name} 所在的据点找不到了，命令作废。`);
+      continue;
+    }
+
+    // 离开道路走到一个坐标：据点里、据点之外都走这一条。
+    if (order.kind === 'offroad') {
+      startOffroad(world, u, order, origin.x, origin.y);
+      continue;
+    }
+
+    // 到据点去。在据点之外出发时没有连接可走，只能离开道路——那一条要先由 User 定倍率，
+    // 界面在下命令那一刻就问过；走到这里说明命令是从别处塞进来的，作废并记一行，不替 User 挑数。
+    if (here.kind === 'camp') {
+      const to = siteById(world, order.to);
+      u.queue.shift();
+      world.log.push(
+        to
+          ? `第 ${world.day} 天：${u.name} 在据点之外，要去 ${to.name} 得先离开道路、定一个倍率，这条命令作废。`
+          : `第 ${world.day} 天：${u.name} 要去据点 ${String(order.to)}，找不到这座据点，命令作废。`,
+      );
+      continue;
+    }
+
+    const from = here.site;
     if (order.to === from) {
       u.queue.shift();
       continue;
@@ -97,9 +126,59 @@ function startQueuedMoves(world: World, p: Params): void {
   }
 }
 
+/** 离开道路那一条命令开工：把起点定在脚下，倍率照命令上那个数。 */
+function startOffroad(
+  world: World,
+  u: Unit,
+  order: Order & { kind: 'offroad' },
+  fromX: number,
+  fromY: number,
+): void {
+  if (order.toSite !== null && !siteById(world, order.toSite)) {
+    u.queue.shift();
+    world.log.push(`第 ${world.day} 天：${u.name} 要去据点 ${String(order.toSite)}，找不到这座据点，命令作废。`);
+    return;
+  }
+  const target = destinationName(world, order.toSite, order.toX, order.toY);
+  u.queue.shift();
+  // 目标就是脚下这一点：不必动，当场停住。
+  if (!(Math.hypot(order.toX - fromX, order.toY - fromY) > 0)) {
+    u.queue = [];
+    u.place = order.toSite !== null
+      ? { kind: 'site', site: order.toSite }
+      : { kind: 'camp', x: order.toX, y: order.toY };
+    world.log.push(`第 ${world.day} 天：${u.name} 已经在 ${target}，不必动。`);
+    return;
+  }
+  u.place = {
+    kind: 'offroad',
+    fromX, fromY, toX: order.toX, toY: order.toY,
+    toSite: order.toSite, t: 0, factor: order.factor,
+  };
+  world.log.push(`第 ${world.day} 天：${u.name} 离开道路，前往 ${target}（倍率 ${String(order.factor)}）。`);
+}
+
 function advanceMarch(world: World, u: Unit, p: Params): void {
   const pl = u.place;
-  if (pl.kind === 'site') return;
+  if (pl.kind === 'site' || pl.kind === 'camp') return;
+
+  // 离开道路那一段：直线距离 ÷ 速度，速度按 User 给的那个倍率算，不读任何连接的地貌。
+  if (pl.kind === 'offroad') {
+    const distance = Math.hypot(pl.toX - pl.fromX, pl.toY - pl.fromY);
+    if (!(distance > 0)) return;
+    const days = marchDays(u, distance, pl.factor, p);
+    if (!Number.isFinite(days) || days <= 0) return;
+    pl.t += 1 / days;
+    if (pl.t < 1) return;
+    u.place = pl.toSite !== null
+      ? { kind: 'site', site: pl.toSite }
+      : { kind: 'camp', x: pl.toX, y: pl.toY };
+    u.queue = [];
+    world.log.push(
+      `第 ${world.day} 天：${u.name} 抵达 ${destinationName(world, pl.toSite, pl.toX, pl.toY)}，停住等命令。`,
+    );
+    return;
+  }
 
   const link = linkById(world, pl.link);
   if (!link) return;

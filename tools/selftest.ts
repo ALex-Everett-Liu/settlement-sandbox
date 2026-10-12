@@ -1,12 +1,14 @@
 // 纯逻辑自检：不碰界面、不碰数据库，直接用 node 跑。
 // 用法：node tools/selftest.ts
-import { answerAsk } from '../src/engine/ask.ts';
+import { answerAsk, askOffroadFactor } from '../src/engine/ask.ts';
 import { DEFAULT_PARAMS } from '../src/engine/params.ts';
 import { mulberry32 } from '../src/engine/rng.ts';
 import { dayOfMonth, isMonthEnd, marchDays, month, tickDay, year } from '../src/engine/tick.ts';
+import type { Place, Unit } from '../src/engine/types.ts';
 import {
   addDivision,
   demoWorld,
+  destinationName,
   divisionRankRefusal,
   divisionSites,
   divisionWouldCycle,
@@ -17,7 +19,9 @@ import {
   seatRefusal,
   siteBranch,
   siteDivisionNote,
+  siteGarrison,
   siteLevels,
+  unitPoint,
   worldFromJson,
   worldToJson,
 } from '../src/engine/world.ts';
@@ -26,6 +30,14 @@ let bad = 0;
 function check(label: string, ok: boolean, extra = ''): void {
   console.log((ok ? 'ok   ' : 'FAIL ') + label + (extra ? '   ' + extra : ''));
   if (!ok) bad += 1;
+}
+
+/**
+ * 读一眼部队的位置。包一层函数是必要的：TS 会把 `u.place` 钉在刚赋的那个字面量那一档上，
+ * 于是推进几天之后再去看 kind，它会报「这两种没有重叠」。
+ */
+function placeOf(u: Unit): Place {
+  return u.place;
 }
 
 const p = DEFAULT_PARAMS;
@@ -205,6 +217,135 @@ check(
   w7.log.filter((line) => line.includes('断粮的处理方式定为')).length === 1,
   String(w7.log.filter((line) => line.includes('断粮的处理方式定为')).length),
 );
+
+console.log('\n== 据点之外的位置 ==');
+const w8 = demoWorld();
+const u8 = w8.units[0]!;
+const s8a = w8.sites[0]!;
+const s8b = w8.sites[1]!;
+const pt8 = unitPoint(w8, u8);
+check('驻军算出来的位置就是那座据点的坐标', pt8 !== null && pt8.x === s8a.x && pt8.y === s8a.y);
+const g8a = siteGarrison(w8, s8a.id);
+const g8b = siteGarrison(w8, s8b.id);
+check('A 城一支驻军、兵力 500', g8a.count === 1 && g8a.troops === 500, String(g8a.count) + ' 支 / ' + String(g8a.troops));
+check('B 城没有驻军', g8b.count === 0 && g8b.troops === 0);
+check(
+  '目的地怎么写：据点写名字、坐标写两位小数',
+  destinationName(w8, s8b.id, 0, 0) === s8b.name &&
+    destinationName(w8, null, 1000.456, 2000) === '（1000.46, 2000）',
+  destinationName(w8, null, 1000.456, 2000),
+);
+
+// 停在据点之外的某一点：这就是「扎营」，队列在这里会启动。
+const w9 = demoWorld();
+const u9 = w9.units[0]!;
+u9.place = { kind: 'camp', x: 1500, y: 1500 };
+u9.queue = [{ kind: 'offroad', toSite: null, toX: 2000, toY: 1000, factor: 0.5 }];
+const pt9 = unitPoint(w9, u9);
+check('停在野地里的坐标就是存下来的那一个', pt9 !== null && pt9.x === 1500 && pt9.y === 1500);
+tickDay(w9, p);
+check('扎营时队列会启动', placeOf(u9).kind === 'offroad', placeOf(u9).kind);
+check(
+  '出发那行把倍率写进去',
+  w9.log.some((line) => line.includes('离开道路') && line.includes('0.5')),
+  w9.log[w9.log.length - 1] ?? '',
+);
+let days9 = 0;
+while (placeOf(u9).kind === 'offroad' && days9 < 400) {
+  tickDay(w9, p);
+  days9 += 1;
+}
+const end9 = placeOf(u9);
+check(
+  '走到那个坐标就停住扎营',
+  end9.kind === 'camp' && end9.x === 2000 && end9.y === 1000,
+  end9.kind,
+);
+check('到达之后队列清空', u9.queue.length === 0);
+
+// 倍率就是道路的几成：同样一段路，倍率小的走得慢。
+function afterOneDay(factor: number): number {
+  const w = demoWorld();
+  const u = w.units[0]!;
+  u.place = { kind: 'camp', x: 0, y: 0 };
+  u.queue = [{ kind: 'offroad', toSite: null, toX: 1000, toY: 0, factor }];
+  tickDay(w, p);
+  const now = placeOf(u);
+  return now.kind === 'offroad' ? now.t : -1;
+}
+const t10 = afterOneDay(0.4);
+const t11 = afterOneDay(1);
+check('倍率越小走得越慢', t10 > 0 && t10 < t11, t10.toFixed(3) + ' < ' + t11.toFixed(3));
+
+// 目的地是一座据点时就进城；从城里出发时起点就是那座城。
+const w12 = demoWorld();
+const u12 = w12.units[0]!;
+const s12b = w12.sites[1]!;
+u12.place = { kind: 'camp', x: s12b.x + 500, y: s12b.y };
+u12.queue = [{ kind: 'offroad', toSite: s12b.id, toX: s12b.x, toY: s12b.y, factor: 1 }];
+let n12 = 0;
+while (placeOf(u12).kind !== 'site' && n12 < 400) {
+  tickDay(w12, p);
+  n12 += 1;
+}
+const end12 = placeOf(u12);
+check('离开道路走到据点就进城', end12.kind === 'site' && end12.site === s12b.id, end12.kind);
+
+const w13 = demoWorld();
+const u13 = w13.units[0]!;
+const s13a = w13.sites[0]!;
+u13.queue = [{ kind: 'offroad', toSite: null, toX: s13a.x + 600, toY: s13a.y, factor: 0.2 }];
+tickDay(w13, p);
+const off13 = placeOf(u13);
+check(
+  '从城里也能离开道路，起点就是那座城',
+  off13.kind === 'offroad' && off13.fromX === s13a.x && off13.fromY === s13a.y,
+  off13.kind,
+);
+
+// 行军中不接新命令：队列原样留着，人接着走。
+const w14 = demoWorld();
+const u14 = w14.units[0]!;
+u14.place = { kind: 'offroad', fromX: 0, fromY: 0, toX: 1000, toY: 0, toSite: null, t: 0, factor: 1 };
+u14.queue = [{ kind: 'offroad', toSite: null, toX: 0, toY: 500, factor: 1 }];
+tickDay(w14, p);
+const walk14 = placeOf(u14);
+check(
+  '行军中不启动队列',
+  u14.queue.length === 1 && walk14.kind === 'offroad' && walk14.t > 0,
+  walk14.kind === 'offroad' ? walk14.t.toFixed(3) : walk14.kind,
+);
+
+// 在据点之外想去据点、命令上又没带倍率：作废并记一行，不替 User 挑一个数。
+const w15 = demoWorld();
+const u15 = w15.units[0]!;
+u15.place = { kind: 'camp', x: 10, y: 10 };
+u15.queue = [{ kind: 'march', to: w15.sites[1]!.id }];
+tickDay(w15, p);
+check(
+  '在据点之外要去据点、没有倍率：作废并记一行',
+  u15.queue.length === 0 && u15.place.kind === 'camp' && w15.log.some((line) => line.includes('得先离开道路')),
+  w15.log[w15.log.length - 1] ?? '',
+);
+
+// 离开道路那一问：空串、乱填、零与负数都不写回；填一个数就把队列换成那一条命令。
+const w16 = demoWorld();
+const u16 = w16.units[0]!;
+const s16b = w16.sites[1]!;
+w16.pending = askOffroadFactor('甲队 要离开道路', u16, { toSite: s16b.id, toX: s16b.x, toY: s16b.y });
+check('问的是离开道路那一趟', w16.pending.target.kind === 'unitOffroadOrder');
+check(
+  '空的、乱的、零与负数都写不回去',
+  !answerAsk(w16, '') && !answerAsk(w16, '   ') && !answerAsk(w16, 'abc') &&
+    !answerAsk(w16, '0') && !answerAsk(w16, '-2'),
+);
+check('写不回去时 pending 还挂着', w16.pending !== null);
+check('填一个数就写回，队列换成那一条命令', answerAsk(w16, '0.4') && u16.queue.length === 1);
+const o16 = u16.queue[0]!;
+check('倍率落在命令上', o16.kind === 'offroad' && o16.factor === 0.4, o16.kind);
+check('目的地记得是那座据点', o16.kind === 'offroad' && o16.toSite === s16b.id);
+check('答完写了日志', w16.log.some((line) => line.includes('领命离开道路')));
+check('答完 pending 清空', w16.pending === null);
 
 console.log('\n== 存档往返 ==');
 const text = worldToJson(w4);

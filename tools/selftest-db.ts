@@ -107,7 +107,7 @@ console.log('\n== 参数表与版本 ==');
 saveParams(db, p);
 check('参数往返一致', canon(loadParams(db)) === canon(p));
 const ver = db.prepare('SELECT v FROM meta WHERE k = ?').get('schema_version') as { v: string };
-check('schema 版本记下来了', Number(ver.v) === 5, ver.v);
+check('schema 版本记下来了', Number(ver.v) === 6, ver.v);
 
 console.log('\n== 旧库缺字段 ==');
 // 造一份加 theme 之前写下的 params：把它按旧格式塞回 meta 表。
@@ -139,7 +139,7 @@ old.close();
 
 const up = openWorldDb(legacyPath);
 const ver2 = up.prepare('SELECT v FROM meta WHERE k = ?').get('schema_version') as { v: string };
-check('版本升到 5', Number(ver2.v) === 5, ver2.v);
+check('版本升到 6', Number(ver2.v) === 6, ver2.v);
 const kept = up.prepare('SELECT detour, terrain FROM links WHERE id = 1').get() as {
   detour: number;
   terrain: string | null;
@@ -190,7 +190,7 @@ v3.close();
 
 const up3 = openWorldDb(v3Path);
 const ver3 = up3.prepare('SELECT v FROM meta WHERE k = ?').get('schema_version') as { v: string };
-check('v3 的库升到 5', Number(ver3.v) === 5, ver3.v);
+check('v3 的库升到 6', Number(ver3.v) === 6, ver3.v);
 const lv = up3.prepare('SELECT id, level FROM sites ORDER BY id').all() as Array<{ id: number; level: number }>;
 check('升级时按上下级算出层级初值', Number(lv[0]?.level) === 1 && Number(lv[1]?.level) === 0, JSON.stringify(lv));
 const divTable = up3
@@ -201,6 +201,80 @@ const divCount = up3.prepare('SELECT COUNT(*) AS n FROM divisions').get() as { n
 check('辖区是空的，等 User 自己建', Number(divCount.n) === 0, String(divCount.n));
 check('升级前留了 v3 的副本', fs.existsSync(path.join(dir, 'legacy-v3.v3-backup.db')));
 up3.close();
+
+console.log('\n== v5 升 v6：自由坐标五列 ==');
+// 造一份 v5 形状的库：units 有 food_policy，但没有自由坐标那几列。
+const v5Path = path.join(dir, 'legacy-v5.db');
+const v5 = new DatabaseSync(v5Path);
+v5.exec(`
+CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+CREATE TABLE sites (
+  id INTEGER PRIMARY KEY, name TEXT NOT NULL, x REAL NOT NULL, y REAL NOT NULL,
+  scale INTEGER NOT NULL, population INTEGER NOT NULL, morale REAL NOT NULL,
+  stability REAL NOT NULL, money REAL NOT NULL, food REAL NOT NULL,
+  parent INTEGER, level INTEGER NOT NULL, division INTEGER, faction INTEGER NOT NULL
+);
+CREATE TABLE units (
+  id INTEGER PRIMARY KEY, faction INTEGER NOT NULL, name TEXT NOT NULL,
+  troops INTEGER NOT NULL, training REAL NOT NULL, organization REAL NOT NULL,
+  place_kind TEXT NOT NULL, place_site INTEGER, place_link INTEGER,
+  place_from INTEGER, place_to INTEGER, place_t REAL,
+  carried_food REAL NOT NULL, queue_json TEXT NOT NULL, food_policy TEXT
+);
+`);
+v5.prepare('INSERT INTO meta (k, v) VALUES (?, ?)').run('schema_version', '5');
+v5.prepare('INSERT INTO meta (k, v) VALUES (?, ?)').run('day', '3');
+v5
+  .prepare(
+    'INSERT INTO sites (id, name, x, y, scale, population, morale, stability, money, food, parent, level, division, faction)' +
+      ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  )
+  .run(1, 'A 城', 100, 200, 1, 0, 70, 60, 0, 0, null, 0, null, 1);
+v5
+  .prepare(
+    'INSERT INTO units (id, faction, name, troops, training, organization, place_kind, place_site,' +
+      ' carried_food, queue_json, food_policy) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  )
+  .run(1, 1, '甲队', 500, 50, 100, 'site', 1, 10, '[]', null);
+v5.close();
+
+const up5 = openWorldDb(v5Path);
+const ver5 = up5.prepare('SELECT v FROM meta WHERE k = ?').get('schema_version') as { v: string };
+check('v5 的库升到 6', Number(ver5.v) === 6, ver5.v);
+const unitCols5 = (
+  up5.prepare("SELECT name FROM pragma_table_info('units')").all() as Array<{ name: string }>
+).map((r) => r.name);
+check(
+  'units 有了自由坐标那五列',
+  ['place_x', 'place_y', 'place_tx', 'place_ty', 'place_factor'].every((c) => unitCols5.includes(c)),
+  unitCols5.join('、'),
+);
+const keptUnit = up5.prepare('SELECT place_kind, place_site, place_x FROM units WHERE id = 1').get() as {
+  place_kind: string;
+  place_site: number;
+  place_x: number | null;
+};
+check(
+  '老行原样留着，新列是空的',
+  keptUnit.place_kind === 'site' && Number(keptUnit.place_site) === 1 && keptUnit.place_x === null,
+);
+check('升级前留了 v5 的副本', fs.existsSync(path.join(dir, 'legacy-v5.v5-backup.db')));
+up5.close();
+
+console.log('\n== 据点之外的位置往返 ==');
+const fieldPath = path.join(dir, 'field.db');
+const fdb = openWorldDb(fieldPath);
+const fw = demoWorld();
+fw.units[0]!.place = { kind: 'camp', x: 1234.5, y: 678.9 };
+fw.units[0]!.queue = [{ kind: 'offroad', toSite: null, toX: 2000, toY: 100, factor: 0.35 }];
+saveWorld(fdb, fw);
+check('停在野地里：坐标与那条命令都回来了', canon(loadWorld(fdb).units) === canon(fw.units));
+fw.units[0]!.place = {
+  kind: 'offroad', fromX: 1.5, fromY: 2.5, toX: 3.5, toY: 4.5, toSite: 2, t: 0.5, factor: 0.25,
+};
+saveWorld(fdb, fw);
+check('离开道路行军：起点、目的地、进度与倍率都回来了', canon(loadWorld(fdb).units) === canon(fw.units));
+fdb.close();
 
 console.log('\n== 空世界也算有世界 ==');
 // 判据不能是「有没有据点」：那样把世界清空之后，下次开就被最小世界盖掉了。

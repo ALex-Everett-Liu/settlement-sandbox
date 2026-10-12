@@ -19,7 +19,7 @@ import type {
 } from '../engine/types.ts';
 import { emptyWorld, levelsFromParents } from '../engine/world.ts';
 
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS units (
   troops INTEGER NOT NULL, training REAL NOT NULL, organization REAL NOT NULL,
   place_kind TEXT NOT NULL, place_site INTEGER, place_link INTEGER,
   place_from INTEGER, place_to INTEGER, place_t REAL,
+  place_x REAL, place_y REAL, place_tx REAL, place_ty REAL, place_factor REAL,
   carried_food REAL NOT NULL, queue_json TEXT NOT NULL, food_policy TEXT
 );
 CREATE TABLE IF NOT EXISTS log (seq INTEGER PRIMARY KEY AUTOINCREMENT, line TEXT NOT NULL);
@@ -133,6 +134,14 @@ function migrate(db: DatabaseSync, dbPath: string, from: number): void {
       }
       steps.push('加 divisions 表与 sites.division（辖区为空，旧关系当作所属据点）');
     }
+    if (from < 6) {
+      // 部队能停在据点之外的任意一点了，位置多出几个数：自己的坐标、目的地坐标，
+      // 以及离开道路那一趟的倍率。旧数据这五列全是空的，读的时候照原来那几档走。
+      for (const col of ['place_x', 'place_y', 'place_tx', 'place_ty', 'place_factor']) {
+        if (!hasColumn(db, 'units', col)) db.exec('ALTER TABLE units ADD COLUMN ' + col + ' REAL');
+      }
+      steps.push('units 加自由坐标五列（place_x／place_y／place_tx／place_ty／place_factor）');
+    }
     metaSet(db, 'schema_version', String(SCHEMA_VERSION));
     db.exec('COMMIT');
   } catch (e) {
@@ -201,6 +210,27 @@ export function fillParamsGaps(db: DatabaseSync, fallback: Params): string[] {
   return missing;
 }
 
+/**
+ * 位置拆成库里那几列。每一档只用得上其中几列，其余一律写 null。
+ * `place_site` 的含义是「这个位置关联的那座据点」：在据点里就是那座据点，
+ * 离开道路而目的地是据点时就是目的据点，其余为空。
+ */
+function placeColumns(p: Place): {
+  site: number | null; link: number | null; from: number | null; to: number | null; t: number | null;
+  x: number | null; y: number | null; tx: number | null; ty: number | null; factor: number | null;
+} {
+  const none = {
+    site: null, link: null, from: null, to: null, t: null,
+    x: null, y: null, tx: null, ty: null, factor: null,
+  };
+  if (p.kind === 'site') return { ...none, site: p.site };
+  if (p.kind === 'camp') return { ...none, x: p.x, y: p.y };
+  if (p.kind === 'offroad') {
+    return { ...none, site: p.toSite, x: p.fromX, y: p.fromY, tx: p.toX, ty: p.toY, t: p.t, factor: p.factor };
+  }
+  return { ...none, link: p.link, from: p.from, to: p.to, t: p.t };
+}
+
 /** 世界整体写回。一次事务里清空再加，简单且不会写坏。日志只追加新的那些行。 */
 export function saveWorld(db: DatabaseSync, world: World): void {
   const storedLog = Number(metaGet(db, 'log_count') ?? '0');
@@ -235,19 +265,16 @@ export function saveWorld(db: DatabaseSync, world: World): void {
 
     const insUnit = db.prepare(
       'INSERT INTO units (id, faction, name, troops, training, organization, place_kind, place_site,' +
-        ' place_link, place_from, place_to, place_t, carried_food, queue_json, food_policy)' +
-        ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        ' place_link, place_from, place_to, place_t, place_x, place_y, place_tx, place_ty, place_factor,' +
+        ' carried_food, queue_json, food_policy)' +
+        ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     );
     for (const u of world.units) {
-      const p = u.place;
+      const p = placeColumns(u.place);
       insUnit.run(
         u.id, u.faction, u.name, u.troops, u.training, u.organization,
-        p.kind,
-        p.kind === 'site' ? p.site : null,
-        p.kind === 'site' ? null : p.link,
-        p.kind === 'site' ? null : p.from,
-        p.kind === 'site' ? null : p.to,
-        p.kind === 'site' ? null : p.t,
+        u.place.kind, p.site, p.link, p.from, p.to, p.t,
+        p.x, p.y, p.tx, p.ty, p.factor,
         u.carriedFood, JSON.stringify(u.queue), u.foodPolicy,
       );
     }
@@ -309,16 +336,33 @@ export function loadWorld(db: DatabaseSync): World {
   }
   for (const r of db.prepare('SELECT * FROM units ORDER BY id').all() as Array<Record<string, unknown>>) {
     const kind = String(r['place_kind']);
-    const place: Place =
-      kind === 'site'
-        ? { kind: 'site', site: Number(r['place_site']) }
-        : {
-            kind: kind === 'camp' ? 'camp' : 'march',
-            link: Number(r['place_link']),
-            from: Number(r['place_from']),
-            to: Number(r['place_to']),
-            t: Number(r['place_t']),
-          };
+    const numOr = (v: unknown): number | null => (v === null || v === undefined ? null : Number(v));
+    const x = numOr(r['place_x']);
+    const y = numOr(r['place_y']);
+    let place: Place;
+    if (kind === 'site') {
+      place = { kind: 'site', site: Number(r['place_site']) };
+    } else if (kind === 'camp' && x !== null && y !== null) {
+      place = { kind: 'camp', x, y };
+    } else if (kind === 'offroad') {
+      place = {
+        kind: 'offroad',
+        fromX: x ?? 0, fromY: y ?? 0,
+        toX: numOr(r['place_tx']) ?? 0, toY: numOr(r['place_ty']) ?? 0,
+        toSite: numOr(r['place_site']),
+        t: numOr(r['place_t']) ?? 0,
+        factor: numOr(r['place_factor']) ?? 1,
+      };
+    } else {
+      // 连接上行军；v5 以前那种「连接上扎营」也落到这一档（那时候还没有自由坐标）。
+      place = {
+        kind: 'march',
+        link: Number(r['place_link']),
+        from: Number(r['place_from']),
+        to: Number(r['place_to']),
+        t: Number(r['place_t']),
+      };
+    }
     w.units.push({
       id: Number(r['id']), faction: Number(r['faction']), name: String(r['name']),
       troops: Number(r['troops']), training: Number(r['training']), organization: Number(r['organization']),

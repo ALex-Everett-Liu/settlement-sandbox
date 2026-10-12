@@ -5,7 +5,8 @@ import { Application, Container, Graphics, Text } from 'pixi.js';
 import { useEffect, useRef, useState } from 'react';
 import { mulberry32 } from '../engine/rng.ts';
 import type { Params, Site, Theme, Unit, World } from '../engine/types.ts';
-import { placeText, round2 } from './format.ts';
+import { siteGarrison, unitPoint } from '../engine/world.ts';
+import { garrisonText, placeText, round2 } from './format.ts';
 
 /** 生成地形用的固定种子：同一份参数每次生成出同一张图。 */
 const TERRAIN_SEED = 20261011;
@@ -315,8 +316,10 @@ function syncSites(scene: Scene, world: World): void {
   }
 }
 
-/** 部队记号：在据点里贴在据点边上，在路上按进度插值。每推进一天都会调一次，很便宜。 */
-/** 部队记号的样子：外面套一圈就是「正在挑它作目的地」。两笔都是填充，宽度不随缩放变。 */
+/**
+ * 部队记号的样子：外面套一圈就是「正在挑它作目的地」。两笔都是填充，宽度不随缩放变。
+ * 驻军没有记号可画（见 syncUnits），所以正在挑一支部队时，高亮落在它所在据点那一圈上。
+ */
 function drawUnitMarker(scene: Scene, u: Unit): void {
   const g = scene.unitGfx.get(u.id);
   if (!g) return;
@@ -328,11 +331,18 @@ function drawUnitMarker(scene: Scene, u: Unit): void {
   g.poly([0, -r, r, 0, 0, r, -r, 0], true).fill({ color: scene.palette.unit });
 }
 
+/**
+ * 部队记号：在据点之外的按它自己的坐标画（连接上看进度、野地看它停在哪），
+ * 在据点里的驻军一个记号都不画——它是唯一没有自己坐标的部队，硬塞一个坐标
+ * 只会压在据点记号上。驻军的支数与兵力在据点浮层与据点表里看。
+ * 每推进一天都会调一次，很便宜。
+ */
 function syncUnits(scene: Scene, world: World): void {
   const { units, unitGfx, unitGfxToUnit } = scene;
   const seen = new Set<number>();
 
   for (const u of world.units) {
+    if (u.place.kind === 'site') continue;
     seen.add(u.id);
     let g = unitGfx.get(u.id);
     if (!g) {
@@ -345,7 +355,7 @@ function syncUnits(scene: Scene, world: World): void {
       unitGfxToUnit.set(g, u.id);
       drawUnitMarker(scene, u);
     }
-    const p = unitWorldPos(world, u);
+    const p = unitPoint(world, u);
     if (p) g.position.set(p.x, p.y);
   }
 
@@ -388,18 +398,6 @@ type Hover =
   | { kind: 'site'; site: Site; level: number; x: number; y: number }
   | { kind: 'unit'; unit: Unit; x: number; y: number };
 
-/** 部队记号在世界里的位置：停在据点里就贴在那个据点边上，在路上按行军进度插值。 */
-function unitWorldPos(world: World, u: Unit): { x: number; y: number } | null {
-  const pl = u.place;
-  if (pl.kind === 'site') {
-    const s = world.sites.find((x) => x.id === pl.site);
-    return s ? { x: s.x + 8, y: s.y + 8 } : null;
-  }
-  const a = world.sites.find((x) => x.id === pl.from);
-  const b = world.sites.find((x) => x.id === pl.to);
-  return a && b ? { x: a.x + (b.x - a.x) * pl.t, y: a.y + (b.y - a.y) * pl.t } : null;
-}
-
 export interface MapViewProps {
   world: World;
   params: Params;
@@ -416,6 +414,8 @@ export interface MapViewProps {
   focus: { kind: 'site' | 'unit'; id: number; n: number } | null;
   onAddSite: (x: number, y: number) => void;
   onPickSite: (id: number) => void;
+  /** 按住 Shift 点一处空白：把一个坐标当作目的地（正在挑目的地时才认这一下）。 */
+  onPickPoint: (x: number, y: number) => void;
   onCancelPick: () => void;
 }
 
@@ -439,6 +439,7 @@ export function MapView({
   focus,
   onAddSite,
   onPickSite,
+  onPickPoint,
   onCancelPick,
 }: MapViewProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -446,6 +447,7 @@ export function MapView({
   const hoverTimer = useRef<number | null>(null);
   const addSiteRef = useRef(onAddSite);
   const pickRef = useRef(onPickSite);
+  const pickPointRef = useRef(onPickPoint);
   const cancelRef = useRef(onCancelPick);
   const worldRef = useRef(world);
   const paramsRef = useRef(params);
@@ -464,6 +466,7 @@ export function MapView({
 
   addSiteRef.current = onAddSite;
   pickRef.current = onPickSite;
+  pickPointRef.current = onPickPoint;
   cancelRef.current = onCancelPick;
   worldRef.current = world;
   paramsRef.current = params;
@@ -582,7 +585,7 @@ export function MapView({
             const w = worldRef.current;
             const site = kind === 'site' ? w.sites.find((x) => x.id === id) : undefined;
             const unit = kind === 'unit' ? w.units.find((x) => x.id === id) : undefined;
-            const at = site ? { x: site.x, y: site.y } : unit ? unitWorldPos(w, unit) : null;
+            const at = site ? { x: site.x, y: site.y } : unit ? unitPoint(w, unit) : null;
             if (!at) return;
             const { width, height } = scene.app.screen;
             const z = Math.max(scene.zoom, 0.4);
@@ -639,8 +642,14 @@ export function MapView({
           dragging = false;
           if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
           if (moved) return;
-          // 一次点击：落在据点上就是挑它，落在空白处就是取消起点。
+          // 一次点击：按住 Shift 且正在挑目的地时，点哪儿就是哪儿——挑一个野地坐标；
+          // 否则落在据点上就是挑它，落在空白处就是取消。
           const r = canvas.getBoundingClientRect();
+          if (e.shiftKey && scene.pickUnit !== null) {
+            const p = toWorld(e.clientX - r.left, e.clientY - r.top);
+            pickPointRef.current(round2(p.x), round2(p.y));
+            return;
+          }
           const id = siteAt(scene, worldRef.current, e.clientX - r.left, e.clientY - r.top);
           if (id !== 0) pickRef.current(id);
           else cancelRef.current();
@@ -696,7 +705,7 @@ export function MapView({
             const w = worldRef.current;
             const u = w.units.find((x) => x.id === id);
             if (!u) return null;
-            const p = unitWorldPos(w, u);
+            const p = unitPoint(w, u);
             return p ? { kind: 'unit', unit: u, x: overlayX(p.x), y: overlayY(p.y) } : null;
           });
         });
@@ -809,7 +818,7 @@ export function MapView({
         <span className="dim small">地图 {params.mapWidth} × {params.mapHeight}</span>
         {outside > 0 ? <span className="dim small">有 {outside} 座据点的坐标在地图外</span> : null}
         <span className="dim small">{cursor ? '坐标 ' + cursor.x.toFixed(2) + ', ' + cursor.y.toFixed(2) : '坐标 —'}</span>
-        <span className="dim small">滚轮缩放 · 拖动平移 · 双击空白处新增据点 · 单击据点挑起点／终点 · 指到据点或部队看它的数</span>
+        <span className="dim small">滚轮缩放 · 拖动平移 · 双击空白处新增据点 · 单击据点挑起点／终点 · 挑目的地时按住 Shift 点空白处挑野地坐标 · 指到据点或部队看它的数</span>
         {pickHint !== null ? <span className="dim small">{pickHint}</span> : null}
       </div>
       {hover ? (
@@ -830,6 +839,9 @@ export function MapView({
               <div>
                 民心 {Math.round(hover.site.morale)} · 稳定 {Math.round(hover.site.stability)}
               </div>
+              {siteGarrison(world, hover.site.id).count > 0 ? (
+                <div>驻军 {garrisonText(world, hover.site.id)}</div>
+              ) : null}
               <div>
                 坐标 {hover.site.x.toFixed(2)}, {hover.site.y.toFixed(2)}
               </div>
