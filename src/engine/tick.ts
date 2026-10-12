@@ -1,7 +1,7 @@
 import type { Order, Params, Unit, World } from './types.ts';
 import { askFoodPolicy, askLinkTerrain } from './ask.ts';
 import { FOOD_POLICY_LABEL } from './labels.ts';
-import { destinationName, linkBetween, linkById, linkLength, otherEnd, siteById, siteName } from './world.ts';
+import { destinationName, linkBetween, linkById, linkLength, linkTerrain, otherEnd, siteById, siteName } from './world.ts';
 
 export function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
@@ -104,8 +104,9 @@ function startQueuedMoves(world: World, p: Params): void {
       continue;
     }
     // 地貌没填就不替 User 猜：停下来问，命令留在队列里，答完再出发。
-    if (link.terrain === null) {
+    if (!linkTerrain(world, link)) {
       world.pending = askLinkTerrain(
+        world,
         `${u.name} 要从 ${siteName(world, from)} 去 ${siteName(world, order.to)}`,
         link,
       );
@@ -184,12 +185,17 @@ function advanceMarch(world: World, u: Unit, p: Params): void {
   if (!link) return;
 
   // 走在半路时地貌被清空了：同样停下来问，不能拿旧值接着算。
-  if (link.terrain === null) {
-    world.pending = askLinkTerrain(`${u.name} 正走在 ${siteName(world, pl.from)} — ${siteName(world, pl.to)} 上`, link);
+  const terrain = linkTerrain(world, link);
+  if (!terrain) {
+    world.pending = askLinkTerrain(
+      world,
+      `${u.name} 正走在 ${siteName(world, pl.from)} — ${siteName(world, pl.to)} 上`,
+      link,
+    );
     return;
   }
 
-  const terrainFactor = p.terrainSpeed[link.terrain];
+  const terrainFactor = terrain.speed;
   const length = linkLength(world, link);
   // 长度为 0（两端坐标被改成重合）：停在原地，不报错也不刷日志；连接表里那一格显示 0。
   if (!(length > 0)) return;

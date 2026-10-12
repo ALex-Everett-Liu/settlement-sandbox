@@ -1,15 +1,19 @@
 // 问询：引擎遇到缺数据就停下来写一个 Ask，User 答完由这里写回世界。
-import { FOOD_POLICY_LABEL, isFoodPolicy, isTerrain, TERRAIN_LABEL, TERRAINS } from './labels.ts';
+import { FOOD_POLICY_LABEL, isFoodPolicy } from './labels.ts';
 import type { Ask, Id, Link, Unit, World } from './types.ts';
-import { destinationName, linkName } from './world.ts';
+import { destinationName, linkName, terrainById } from './world.ts';
 
-/** 地貌没填时的那一问。选项就是五档，默认值留给界面用。 */
-export function askLinkTerrain(subject: string, link: Link): Ask {
+/**
+ * 地貌没填时的那一问。选项就是 User 自己那一串地貌（一档一行，按表里的次序排），
+ * 一个都不给候选时说明地貌表是空的——那种情况下这一问答不了，所以界面会拦着不让删到只剩零档。
+ */
+export function askLinkTerrain(world: World, subject: string, link: Link): Ask {
+  const options = world.terrains.map((t) => ({ value: String(t.id), label: t.name }));
   return {
     subject,
     question: '这条连接还没填地貌，行军速度按哪一档算？',
-    options: TERRAINS.map((t) => ({ value: t, label: TERRAIN_LABEL[t] })),
-    fallback: 'plain',
+    options,
+    fallback: options.length > 0 ? (options[0] as { value: string }).value : '',
     target: { kind: 'linkTerrain', link: link.id },
   };
 }
@@ -55,9 +59,12 @@ export function answerAsk(world: World, value: string): boolean {
   const target = ask.target;
   if (target.kind === 'linkTerrain') {
     const link = world.links.find((l) => l.id === target.link);
-    if (!link || !isTerrain(value)) return false;
-    link.terrain = value;
-    world.log.push(`第 ${world.day} 天：把 ${linkName(world, link)} 的地貌填成 ${TERRAIN_LABEL[value]}。`);
+    // 答案是一个地貌编号：填出来的编号得真有那么一档才算数。
+    const id = Number(value.trim());
+    const terrain = Number.isFinite(id) ? terrainById(world, id) : undefined;
+    if (!link || !terrain) return false;
+    link.terrain = terrain.id;
+    world.log.push(`第 ${world.day} 天：把 ${linkName(world, link)} 的地貌填成 ${terrain.name}。`);
   } else if (target.kind === 'unitFoodPolicy') {
     const unit = world.units.find((u) => u.id === target.unit);
     if (!unit || !isFoodPolicy(value)) return false;

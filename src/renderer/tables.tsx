@@ -3,8 +3,23 @@
 // queue, the five totals on a faction row) stay read-only text.
 import { useRef, useState } from 'react';
 import type { Link, Order, Site, Terrain, Unit, World } from '../engine/types.ts';
-import { divisionName, divisionSites, linkLength, siteBranch } from '../engine/world.ts';
-import { factionName, garrisonText, orderText, placeText, round1, round2, siteName, TERRAIN_LABEL, TERRAINS } from './format.ts';
+import { divisionName, divisionSites, linkLength, siteBranch, terrainLinks, terrainName } from '../engine/world.ts';
+import { factionName, garrisonText, orderText, placeText, round1, round2, siteName } from './format.ts';
+
+/**
+ * 地貌那四个数各自的上下限、小数位与中文名。越界的写法一律挡回来（见 App 的 terrainRefusal），
+ * 由界面把理由写进说明行，等 User 自己改一个数——不夹到边界。
+ * 速度系数的下限是 0.01 而不是 0：0 或负数会让行军天数变成无穷，部队就永远走不到，不声不响地卡住。
+ */
+export const TERRAIN_RANGE: Record<
+  'speed' | 'width' | 'defense' | 'food',
+  { label: string; lo: number; hi: number; step: number }
+> = {
+  speed: { label: '行军速度系数', lo: 0.01, hi: 100, step: 0.05 },
+  width: { label: '战场宽度', lo: 0, hi: 100000, step: 1 },
+  defense: { label: '守方加成', lo: 0, hi: 100, step: 0.05 },
+  food: { label: '粮草产出系数', lo: 0, hi: 100, step: 0.05 },
+};
 
 function toNumber(text: string, fallback: number): number {
   if (text.trim() === '') return fallback;
@@ -796,22 +811,123 @@ export function LinkTable({ world, onEdit, onDelete }: LinkTableProps) {
                 />
               </td>
               <td>
-                <select
-                  value={l.terrain ?? ''}
-                  onChange={(e) => onEdit(l.id, { terrain: e.target.value === '' ? null : (e.target.value as Terrain) })}
-                >
-                  <option value="">（未填）</option>
-                  {TERRAINS.map((t) => (
-                    <option key={t} value={t}>
-                      {TERRAIN_LABEL[t]}
-                    </option>
-                  ))}
-                </select>
+                <NamePicker
+                  value={l.terrain === null ? '（未填）' : terrainName(world, l.terrain)}
+                  items={[
+                    { id: 0, name: '（未填）' },
+                    ...world.terrains.map((t) => ({ id: t.id, name: t.name, tag: '#' + String(t.id) })),
+                  ]}
+                  label="地貌"
+                  emptyPick={{ id: 0, name: '（未填）' }}
+                  onPick={(item) => onEdit(l.id, { terrain: item.id === 0 ? null : item.id })}
+                />
               </td>
             </tr>
           );
         })}
       </tbody>
+    </table>
+  );
+}
+
+interface TerrainTableProps {
+  world: World;
+  onEdit: (id: number, patch: Partial<Terrain>) => void;
+  onDelete: (id: number) => void;
+  onAdd: () => void;
+  /** 哪一格写了写不回去的值：报给说明行，值留在格子里等 User 自己改。 */
+  onNote: (message: string) => void;
+}
+
+/**
+ * 地貌表：一档一行，名字与四个数都由 User 自己填，想细分就多加几行。
+ * 「用它的连接」是算出来的；有连接指着它就不许删（由 App 挡回来）。
+ */
+export function TerrainTable({ world, onEdit, onDelete, onAdd, onNote }: TerrainTableProps) {
+  return (
+    <table>
+      <thead>
+        <tr>
+          <th>名字</th>
+          <th>行军速度系数</th>
+          <th>战场宽度</th>
+          <th>守方加成</th>
+          <th>粮草产出系数</th>
+          <th>用它的连接</th>
+          <th>删除</th>
+        </tr>
+      </thead>
+      <tbody>
+        {world.terrains.map((t) => (
+          <tr key={t.id}>
+            <td>
+              <input value={t.name} onChange={(e) => onEdit(t.id, { name: e.target.value })} />
+            </td>
+            <td>
+              <NumberCell
+                value={t.speed}
+                min={TERRAIN_RANGE.speed.lo}
+                max={TERRAIN_RANGE.speed.hi}
+                step={TERRAIN_RANGE.speed.step}
+                label={TERRAIN_RANGE.speed.label}
+                title="行军速度系数：平原 1、山地 0.55 这一类，越小越难走。下限 0.01——填 0 或负数会让行军天数变成无穷，部队就永远走不到。"
+                onCommit={(v) => onEdit(t.id, { speed: v })}
+                onNote={onNote}
+              />
+            </td>
+            <td>
+              <NumberCell
+                value={t.width}
+                min={TERRAIN_RANGE.width.lo}
+                max={TERRAIN_RANGE.width.hi}
+                step={TERRAIN_RANGE.width.step}
+                label={TERRAIN_RANGE.width.label}
+                title="战场宽度。战斗还没做，眼下没有读者，先把数填着。"
+                onCommit={(v) => onEdit(t.id, { width: v })}
+                onNote={onNote}
+              />
+            </td>
+            <td>
+              <NumberCell
+                value={t.defense}
+                min={TERRAIN_RANGE.defense.lo}
+                max={TERRAIN_RANGE.defense.hi}
+                step={TERRAIN_RANGE.defense.step}
+                label={TERRAIN_RANGE.defense.label}
+                title="守方加成，1 表示不加成。战斗还没做，眼下没有读者。"
+                onCommit={(v) => onEdit(t.id, { defense: v })}
+                onNote={onNote}
+              />
+            </td>
+            <td>
+              <NumberCell
+                value={t.food}
+                min={TERRAIN_RANGE.food.lo}
+                max={TERRAIN_RANGE.food.hi}
+                step={TERRAIN_RANGE.food.step}
+                label={TERRAIN_RANGE.food.label}
+                title="粮草产出系数，1 表示不加成。按地貌算粮草那一条还没做，眼下没有读者。"
+                onCommit={(v) => onEdit(t.id, { food: v })}
+                onNote={onNote}
+              />
+            </td>
+            <td className="ro">{terrainLinks(world, t.id)} 条</td>
+            <td>
+              <div className="row">
+                <span className="dim small">#{t.id}</span>
+                <DeleteButton what={'地貌「' + t.name + '」'} onConfirm={() => onDelete(t.id)} />
+              </div>
+            </td>
+          </tr>
+        ))}
+      </tbody>
+      <tfoot>
+        <tr>
+          <td colSpan={7}>
+            <button onClick={onAdd}>＋ 新增地貌</button>
+          </td>
+        </tr>
+      </tfoot>
     </table>
   );
 }

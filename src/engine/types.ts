@@ -2,8 +2,23 @@
 
 export type Id = number;
 
-/** 地貌五档。影响野战宽度、行军速度、守方加成、粮草产出。 */
-export type Terrain = 'plain' | 'hill' | 'mountain' | 'water' | 'pass';
+/**
+ * 一档地貌。名字与四个数都由 User 声明，想细分就多建几行，行与行之间互不隶属。
+ * 眼下只有 speed 有读者（行军速度）；战场宽度、守方加成、粮草产出三项等着战斗
+ * 与按地貌算粮草那两条链接上来。
+ */
+export interface Terrain {
+  id: Id;
+  name: string;
+  /** 行军速度系数：平原 1，山地 0.55 这一类。越小越难走。 */
+  speed: number;
+  /** 战场宽度。 */
+  width: number;
+  /** 守方加成，1 表示不加成。 */
+  defense: number;
+  /** 粮草产出系数，1 表示不加成。 */
+  food: number;
+}
 
 /** 断粮时的处理方式（设计 §五 第 11 条）。每支部队各记各的。 */
 export type FoodPolicy = 'attrition' | 'forage' | 'restrict';
@@ -133,8 +148,8 @@ export interface Link {
   b: Id;
   /** 绕行系数。长度 = 两端直线距离 × 它，默认 1.0；山路绕远就调大。 */
   detour: number;
-  /** null 表示这条连接还没填地貌。引擎不许自己挑一档，会停下来问。 */
-  terrain: Terrain | null;
+  /** 地貌：指向 `World.terrains` 里的一档；null 表示还没填。 */
+  terrain: Id | null;
 }
 
 export interface World {
@@ -146,6 +161,8 @@ export interface World {
   sites: Site[];
   units: Unit[];
   links: Link[];
+  /** 地貌：一档一行，由 User 自己增改。连接只指向这里的编号。 */
+  terrains: Terrain[];
   /** 日志。现在是事件级的，还没有做到「每支部队每天一行」。 */
   log: string[];
   /** 引擎停在这里等 User 回答；不为 null 时时间轴一天也不往前走。 */
@@ -174,9 +191,8 @@ export interface Params {
   stabilityBaseline: number;
   /** 人口每月按民心偏移的增长率分母。 */
   populationMoraleDivisor: number;
-  /** 行军速度基准（地图单位／天），再乘地貌系数与部队系数。 */
+  /** 行军速度基准（地图单位／天），再乘地貌那一档的系数与部队系数。 */
   speedBase: number;
-  terrainSpeed: Record<Terrain, number>;
 
   /** 地图的框：原点在左下角，x 向右、y 向上。 */
   mapWidth: number;

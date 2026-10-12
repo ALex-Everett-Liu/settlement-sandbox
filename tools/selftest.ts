@@ -7,6 +7,7 @@ import { dayOfMonth, isMonthEnd, marchDays, month, tickDay, year } from '../src/
 import type { Place, Unit } from '../src/engine/types.ts';
 import {
   addDivision,
+  addTerrain,
   demoWorld,
   destinationName,
   divisionRankRefusal,
@@ -14,6 +15,7 @@ import {
   divisionWouldCycle,
   levelRefusal,
   linkLength,
+  linkTerrain,
   parentLevelRefusal,
   parentWouldCycle,
   seatRefusal,
@@ -21,6 +23,9 @@ import {
   siteDivisionNote,
   siteGarrison,
   siteLevels,
+  terrainById,
+  terrainLinks,
+  terrainName,
   unitPoint,
   worldFromJson,
   worldToJson,
@@ -184,19 +189,57 @@ check(
 );
 check('问的是那条连接', w6.pending?.target.kind === 'linkTerrain');
 check(
-  '选项是地貌五档',
-  w6.pending?.options.length === 5,
+  '选项就是地貌表里那几行',
+  w6.pending?.options.length === w6.terrains.length && w6.pending?.options.length === 5,
   (w6.pending?.options ?? []).map((o) => o.label).join('、'),
 );
 const dayAtAsk = w6.day;
 tickDay(w6, p);
 check('没回答之前时间轴不走', w6.day === dayAtAsk, '第 ' + w6.day + ' 天');
 check('乱填的值不写回', !answerAsk(w6, 'swamp') && w6.pending !== null);
-check('合法的值写回世界', answerAsk(w6, 'hill') && w6.links[0]!.terrain === 'hill');
+// 山地是第二行（编号 2）：答案给的是编号，不是名字。
+check('合法的编号写回世界', answerAsk(w6, '2') && w6.links[0]!.terrain === 2, String(w6.links[0]!.terrain));
 check('答完 pending 清空', w6.pending === null);
 check('答完写了日志', w6.log.some((line) => line.includes('地貌填成 丘陵')));
 tickDay(w6, p);
 check('答完就能出发', u6.place.kind === 'march', '第 ' + w6.day + ' 天');
+
+console.log('\n== 地貌表 ==');
+const wt = demoWorld();
+check(
+  '开头那五档与旧的名字、速度系数一致',
+  wt.terrains.map((t) => t.name + ':' + String(t.speed)).join('、') ===
+    '平原:1、丘陵:0.8、山地:0.55、水网:0.7、隘口:0.6',
+  wt.terrains.map((t) => t.name).join('、'),
+);
+check('连接指的就是平原那一行的编号', wt.links[0]!.terrain === wt.terrains[0]!.id);
+const hill = terrainById(wt, 2);
+check('按编号取得到那一档', hill !== undefined && hill.name === '丘陵');
+check('取不到时用编号顶上', terrainName(wt, 99) === '地貌 99', terrainName(wt, 99));
+check('平原那一行有一条连接指着', terrainLinks(wt, 1) === 1 && terrainLinks(wt, 2) === 0);
+check('没填的连接算「未填」', linkTerrain(wt, { ...wt.links[0]!, terrain: null }) === undefined);
+check('编号指不到任何一档也算「未填」', linkTerrain(wt, { ...wt.links[0]!, terrain: 99 }) === undefined);
+
+// 行里那个速度系数真在算：把它改成一半，同一段路的天数就翻一倍。
+const wtSlow = demoWorld();
+wtSlow.terrains[0]!.speed = 0.5;
+wtSlow.units[0]!.place = { kind: 'camp', x: 0, y: 0 };
+wtSlow.units[0]!.queue = [{ kind: 'march', to: wtSlow.sites[1]!.id }];
+const daysFast = marchDays(wt.units[0]!, linkLength(wt, wt.links[0]!), wt.terrains[0]!.speed, p);
+const daysSlow = marchDays(wtSlow.units[0]!, linkLength(wtSlow, wtSlow.links[0]!), wtSlow.terrains[0]!.speed, p);
+check('系数减半，天数翻倍', Math.abs(daysSlow - daysFast * 2) < 1e-9, daysFast.toFixed(2) + ' → ' + daysSlow.toFixed(2));
+
+// 地貌表是 User 自己增改的：加一行，下一个问题里就多一个候选。
+const wt2 = demoWorld();
+const marsh = addTerrain(wt2, '沼泽', 0.3, 60, 0.8, 0.5);
+wt2.links[0]!.terrain = null;
+tickDay(wt2, p);
+check(
+  '新加的那一档也在候选里',
+  wt2.pending?.options.length === 6 && wt2.pending.options.some((o) => o.label === '沼泽'),
+  (wt2.pending?.options ?? []).map((o) => o.label).join('、'),
+);
+check('答新加的那一档也认', answerAsk(wt2, String(marsh.id)) && wt2.links[0]!.terrain === marsh.id);
 
 console.log('\n== 断粮就问 ==');
 const w7 = demoWorld();

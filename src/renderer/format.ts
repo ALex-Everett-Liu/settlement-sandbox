@@ -1,11 +1,7 @@
 // Renderer-side formatting: engine enums and positions become Chinese labels.
 // Nothing here mutates the world.
-import { TERRAIN_LABEL, TERRAINS } from '../engine/labels.ts';
 import type { Place, Unit, World } from '../engine/types.ts';
 import { destinationName, siteGarrison } from '../engine/world.ts';
-
-// 地貌的名字与顺序由引擎那边给，界面不再各写一份。
-export { TERRAIN_LABEL, TERRAINS };
 
 export function siteName(world: World, id: number): string {
   const site = world.sites.find((s) => s.id === id);

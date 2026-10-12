@@ -59,6 +59,11 @@ check(
 );
 check('表里的行数对得上', siteCount(db) === 2 && unitCount(db) === 1, siteCount(db) + ' 据点 / ' + unitCount(db) + ' 部队');
 check('往返之后世界一模一样', canon(back0) === canon(w));
+check(
+  '地貌那五行也往返一致',
+  canon(back0.terrains) === canon(w.terrains),
+  back0.terrains.map((t) => t.name).join('、'),
+);
 
 console.log('\n== 推进 30 天并存档 ==');
 for (let i = 0; i < 30; i += 1) tickDay(w, p);
@@ -107,7 +112,7 @@ console.log('\n== 参数表与版本 ==');
 saveParams(db, p);
 check('参数往返一致', canon(loadParams(db)) === canon(p));
 const ver = db.prepare('SELECT v FROM meta WHERE k = ?').get('schema_version') as { v: string };
-check('schema 版本记下来了', Number(ver.v) === 7, ver.v);
+check('schema 版本记下来了', Number(ver.v) === 8, ver.v);
 
 console.log('\n== 旧库缺字段 ==');
 // 造一份加 theme 之前写下的 params：把它按旧格式塞回 meta 表。
@@ -139,19 +144,27 @@ old.close();
 
 const up = openWorldDb(legacyPath);
 const ver2 = up.prepare('SELECT v FROM meta WHERE k = ?').get('schema_version') as { v: string };
-check('版本升到 7', Number(ver2.v) === 7, ver2.v);
+check('版本升到 8', Number(ver2.v) === 8, ver2.v);
 const kept = up.prepare('SELECT detour, terrain FROM links WHERE id = 1').get() as {
   detour: number;
-  terrain: string | null;
+  terrain: number | null;
 };
-check('升级时地貌带过来了', kept.terrain === 'plain', String(kept.terrain));
+check('升级时地貌按名字指到了平原那一行', Number(kept.terrain) === 1, String(kept.terrain));
 check('长度换成系数，按 1.0 起', Number(kept.detour) === 1, String(kept.detour));
+const terrainCol = up.prepare("SELECT type FROM pragma_table_info('links') WHERE name = 'terrain'").get() as {
+  type: string;
+};
+check('links.terrain 由名字改成了编号列', terrainCol.type.toUpperCase() === 'INTEGER', terrainCol.type);
+const terrainRows = up.prepare('SELECT COUNT(*) AS n FROM terrains').get() as { n: number };
+check('terrains 表写进了开头那五档', Number(terrainRows.n) === 5, String(terrainRows.n));
+const plainRow = up.prepare('SELECT name, speed FROM terrains WHERE id = 1').get() as { name: string; speed: number };
+check('平原那一行的名字与系数照旧', plainRow.name === '平原' && Number(plainRow.speed) === 1, JSON.stringify(plainRow));
 const linkCols = (up.prepare("SELECT name FROM pragma_table_info('links')").all() as Array<{ name: string }>).map(
   (r) => r.name,
 );
 check('老的长度列没了', !linkCols.includes('distance'), linkCols.join('、'));
 up.prepare('UPDATE links SET terrain = NULL WHERE id = 1').run();
-const nulled = up.prepare('SELECT terrain FROM links WHERE id = 1').get() as { terrain: string | null };
+const nulled = up.prepare('SELECT terrain FROM links WHERE id = 1').get() as { terrain: number | null };
 check('升级后地貌可以为空', nulled.terrain === null);
 const cols = (up.prepare("SELECT name FROM pragma_table_info('units')").all() as Array<{ name: string }>).map(
   (r) => r.name,
@@ -166,7 +179,7 @@ const keptDay = up.prepare('SELECT v FROM meta WHERE k = ?').get('day') as { v: 
 check('day 没被动过', Number(keptDay.v) === 7, keptDay.v);
 up.close();
 
-console.log('\n== v3 升 v7：层级初值、辖区表与拆开的两个新字段 ==');
+console.log('\n== v3 升 v8：层级初值、辖区表与拆开的两个新字段 ==');
 // 造一份 v3 形状的库：sites 没有 level 列，B 挂在 A 下面（A 应当拿第 1 层、B 拿第 0 层）。
 const v3Path = path.join(dir, 'legacy-v3.db');
 const v3 = new DatabaseSync(v3Path);
@@ -190,7 +203,7 @@ v3.close();
 
 const up3 = openWorldDb(v3Path);
 const ver3 = up3.prepare('SELECT v FROM meta WHERE k = ?').get('schema_version') as { v: string };
-check('v3 的库升到 7', Number(ver3.v) === 7, ver3.v);
+check('v3 的库升到 8', Number(ver3.v) === 8, ver3.v);
 const lv = up3.prepare('SELECT id, level FROM sites ORDER BY id').all() as Array<{ id: number; level: number }>;
 check('升级时按上下级算出层级初值', Number(lv[0]?.level) === 1 && Number(lv[1]?.level) === 0, JSON.stringify(lv));
 const divTable = up3
@@ -221,7 +234,7 @@ check(
 check('升级前留了 v3 的副本', fs.existsSync(path.join(dir, 'legacy-v3.v3-backup.db')));
 up3.close();
 
-console.log('\n== v5 升 v7：自由坐标五列与拆开的两个新字段 ==');
+console.log('\n== v5 升 v8：自由坐标五列与拆开的两个新字段 ==');
 // 造一份 v5 形状的库：units 有 food_policy，但没有自由坐标那几列。
 const v5Path = path.join(dir, 'legacy-v5.db');
 const v5 = new DatabaseSync(v5Path);
@@ -259,7 +272,7 @@ v5.close();
 
 const up5 = openWorldDb(v5Path);
 const ver5 = up5.prepare('SELECT v FROM meta WHERE k = ?').get('schema_version') as { v: string };
-check('v5 的库升到 7', Number(ver5.v) === 7, ver5.v);
+check('v5 的库升到 8', Number(ver5.v) === 8, ver5.v);
 const unitCols5 = (
   up5.prepare("SELECT name FROM pragma_table_info('units')").all() as Array<{ name: string }>
 ).map((r) => r.name);

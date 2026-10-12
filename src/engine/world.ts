@@ -1,7 +1,9 @@
 import type { Division, Faction, Id, Link, Site, Terrain, Unit, World } from './types.ts';
 
 export function emptyWorld(): World {
-  return { day: 0, factions: [], divisions: [], sites: [], units: [], links: [], log: [], pending: null };
+  return {
+    day: 0, factions: [], divisions: [], sites: [], units: [], links: [], terrains: [], log: [], pending: null,
+  };
 }
 
 /**
@@ -24,7 +26,7 @@ export function addSite(world: World, site: Omit<Site, 'id'>): Site {
   return s;
 }
 
-export function addLink(world: World, a: Id, b: Id, detour: number, terrain: Terrain | null): Link {
+export function addLink(world: World, a: Id, b: Id, detour: number, terrain: Id | null): Link {
   const l: Link = { id: nextId(world.links), a, b, detour, terrain };
   world.links.push(l);
   return l;
@@ -76,6 +78,59 @@ export function otherEnd(link: Link, from: Id): Id {
 }
 
 // —— 部队的位置与驻军 ——
+
+// —— 地貌：一档一行，由 User 自己增改。连接只指向这里的编号。——
+
+export function addTerrain(
+  world: World,
+  name: string,
+  speed: number,
+  width: number,
+  defense: number,
+  food: number,
+): Terrain {
+  const t: Terrain = { id: nextId(world.terrains), name, speed, width, defense, food };
+  world.terrains.push(t);
+  return t;
+}
+
+export function terrainById(world: World, id: Id): Terrain | undefined {
+  return world.terrains.find((t) => t.id === id);
+}
+
+/** 地貌名，找不到就用编号顶上。日志与说明行都用它。 */
+export function terrainName(world: World, id: Id): string {
+  const t = terrainById(world, id);
+  return t ? t.name : '地貌 ' + String(id);
+}
+
+/**
+ * 这条连接的地貌。没填、或者编号指不到任何一档，都算「未填」——引擎不替 User 挑一档，
+ * 走到这条连接上就停下来问。
+ */
+export function linkTerrain(world: World, link: Link): Terrain | undefined {
+  return link.terrain === null ? undefined : terrainById(world, link.terrain);
+}
+
+/** 有几条连接指着这一档地貌。删除挡路与表里那一列都用它。 */
+export function terrainLinks(world: World, id: Id): number {
+  return world.links.filter((l) => l.terrain === id).length;
+}
+
+/**
+ * 新世界开头的那五档，名字与行军速度系数照搬原来写死的那一套。
+ * 后面三个数（战场宽度、守方加成、粮草产出系数）现在是同一个占位值：还没有读者，
+ * 等战斗与按地貌算粮草那两条链做出来，再由 User 自己调。
+ */
+export function seedTerrains(world: World): Terrain[] {
+  return [
+    addTerrain(world, '平原', 1, 100, 1, 1),
+    addTerrain(world, '丘陵', 0.8, 100, 1, 1),
+    addTerrain(world, '山地', 0.55, 100, 1, 1),
+    addTerrain(world, '水网', 0.7, 100, 1, 1),
+    addTerrain(world, '隘口', 0.6, 100, 1, 1),
+  ];
+}
 
 /**
  * 部队当前在哪一点。在据点里就用那座据点的坐标，停着就用存下来的坐标，
@@ -339,6 +394,7 @@ export function demoWorld(): World {
   const w = emptyWorld();
   const wei = addFaction(w, '魏');
   const shu = addFaction(w, '蜀');
+  const plain = seedTerrains(w)[0]!;
 
   const a = addSite(w, {
     name: 'A 城', x: 1000, y: 2000, development: 60, fortification: 2, population: 9000,
@@ -349,7 +405,7 @@ export function demoWorld(): World {
     morale: 65, stability: 55, money: 800, food: 800, parent: null, level: 0, division: null, faction: shu.id,
   });
 
-  addLink(w, a.id, b.id, 1, 'plain');
+  addLink(w, a.id, b.id, 1, plain.id);
 
   addUnit(w, {
     faction: wei.id, name: '甲队', troops: 500, training: 50, organization: 100,

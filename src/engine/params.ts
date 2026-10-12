@@ -29,7 +29,7 @@ export const DEFAULT_PARAMS: Params = {
   populationMoraleDivisor: 10000,
 
   speedBase: 120,
-  terrainSpeed: { plain: 1, hill: 0.8, mountain: 0.55, water: 0.7, pass: 0.6 },
+  // 各地貌的行军速度系数不在这里：它是地貌表每一行上的一个数，由 User 自己增改（schema v8 起）。
 
   /** 地图的框。坐标原点在左下角，范围是 0..mapWidth × 0..mapHeight。 */
   mapWidth: 10000,

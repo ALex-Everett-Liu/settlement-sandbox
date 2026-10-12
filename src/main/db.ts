@@ -19,7 +19,7 @@ import type {
 } from '../engine/types.ts';
 import { emptyWorld, levelsFromParents } from '../engine/world.ts';
 
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
@@ -35,9 +35,13 @@ CREATE TABLE IF NOT EXISTS sites (
   stability REAL NOT NULL, money REAL NOT NULL, food REAL NOT NULL,
   parent INTEGER, level INTEGER NOT NULL, division INTEGER, faction INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS terrains (
+  id INTEGER PRIMARY KEY, name TEXT NOT NULL, speed REAL NOT NULL,
+  width REAL NOT NULL, defense REAL NOT NULL, food REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS links (
   id INTEGER PRIMARY KEY, a INTEGER NOT NULL, b INTEGER NOT NULL,
-  detour REAL NOT NULL, terrain TEXT
+  detour REAL NOT NULL, terrain INTEGER
 );
 CREATE TABLE IF NOT EXISTS units (
   id INTEGER PRIMARY KEY, faction INTEGER NOT NULL, name TEXT NOT NULL,
@@ -143,6 +147,36 @@ function migrate(db: DatabaseSync, dbPath: string, from: number): void {
       }
       steps.push('units 加自由坐标五列（place_x／place_y／place_tx／place_ty／place_factor）');
     }
+    if (from < 8) {
+      // 地貌从写死的五档变成一串由 User 自己增改的记录：连接改指编号，系数搬到行上去。
+      // 旧的五档照原样写成前五行（编号 1–5），旧连接按名字指过去。
+      const seeded = db.prepare('SELECT COUNT(*) AS n FROM terrains').get() as { n: number };
+      if (Number(seeded.n) === 0) {
+        const insTerrain = db.prepare(
+          'INSERT INTO terrains (id, name, speed, width, defense, food) VALUES (?, ?, ?, ?, ?, ?)',
+        );
+        const seeds: Array<[number, string, number]> = [
+          [1, '平原', 1], [2, '丘陵', 0.8], [3, '山地', 0.55], [4, '水网', 0.7], [5, '隘口', 0.6],
+        ];
+        // 后三个数是占位值：战场宽度、守方加成、粮草产出系数现在都还没有读者。
+        for (const [id, name, speed] of seeds) insTerrain.run(id, name, speed, 100, 1, 1);
+        steps.push('terrains 写入开头那五档（平原／丘陵／山地／水网／隘口）');
+      }
+      if (columnType(db, 'links', 'terrain') !== 'INTEGER') {
+        db.exec(
+          'CREATE TABLE links_v8 (id INTEGER PRIMARY KEY, a INTEGER NOT NULL, b INTEGER NOT NULL,' +
+            ' detour REAL NOT NULL, terrain INTEGER)',
+        );
+        db.exec(
+          'INSERT INTO links_v8 (id, a, b, detour, terrain) SELECT id, a, b, detour,' +
+            " CASE terrain WHEN 'plain' THEN 1 WHEN 'hill' THEN 2 WHEN 'mountain' THEN 3" +
+            " WHEN 'water' THEN 4 WHEN 'pass' THEN 5 ELSE NULL END FROM links",
+        );
+        db.exec('DROP TABLE links');
+        db.exec('ALTER TABLE links_v8 RENAME TO links');
+        steps.push('links.terrain 由名字改成地貌编号');
+      }
+    }
     if (from < 7) {
       // 规模拆成两个数：发展度（原来那个规模折算成 0–100）与防御设施等级（从 0 起，
       // 旧数据没有这一项）。SQLite 改不了现成列的名字与类型，按老办法把这张表重建一次。
@@ -188,6 +222,16 @@ function keepBackup(db: DatabaseSync, dbPath: string, from: number): string {
 function hasColumn(db: DatabaseSync, table: string, column: string): boolean {
   const rows = db.prepare("SELECT name FROM pragma_table_info('" + table + "')").all() as Array<{ name: string }>;
   return rows.some((r) => r.name === column);
+}
+
+/** 这一列在库里是什么类型（大写）。判断该不该重建那张表时用它。 */
+function columnType(db: DatabaseSync, table: string, column: string): string {
+  const rows = db.prepare("SELECT name, type FROM pragma_table_info('" + table + "')").all() as Array<{
+    name: string;
+    type: string;
+  }>;
+  const row = rows.find((r) => r.name === column);
+  return row ? row.type.toUpperCase() : '';
 }
 
 function metaGet(db: DatabaseSync, key: string): string | undefined {
@@ -265,6 +309,7 @@ export function saveWorld(db: DatabaseSync, world: World): void {
     db.exec('DELETE FROM divisions');
     db.exec('DELETE FROM sites');
     db.exec('DELETE FROM links');
+    db.exec('DELETE FROM terrains');
     db.exec('DELETE FROM units');
 
     const insFaction = db.prepare('INSERT INTO factions (id, name) VALUES (?, ?)');
@@ -286,6 +331,11 @@ export function saveWorld(db: DatabaseSync, world: World): void {
 
     const insLink = db.prepare('INSERT INTO links (id, a, b, detour, terrain) VALUES (?, ?, ?, ?, ?)');
     for (const l of world.links) insLink.run(l.id, l.a, l.b, l.detour, l.terrain);
+
+    const insTerrain = db.prepare(
+      'INSERT INTO terrains (id, name, speed, width, defense, food) VALUES (?, ?, ?, ?, ?, ?)',
+    );
+    for (const t of world.terrains) insTerrain.run(t.id, t.name, t.speed, t.width, t.defense, t.food);
 
     const insUnit = db.prepare(
       'INSERT INTO units (id, faction, name, troops, training, organization, place_kind, place_site,' +
@@ -352,11 +402,17 @@ export function loadWorld(db: DatabaseSync): World {
       faction: Number(r['faction']),
     } satisfies Site);
   }
+  for (const r of db.prepare('SELECT * FROM terrains ORDER BY id').all() as Array<Record<string, unknown>>) {
+    w.terrains.push({
+      id: Number(r['id']), name: String(r['name']), speed: Number(r['speed']),
+      width: Number(r['width']), defense: Number(r['defense']), food: Number(r['food']),
+    } satisfies Terrain);
+  }
   for (const r of db.prepare('SELECT * FROM links ORDER BY id').all() as Array<Record<string, unknown>>) {
     w.links.push({
       id: Number(r['id']), a: Number(r['a']), b: Number(r['b']),
       detour: Number(r['detour']),
-      terrain: r['terrain'] === null ? null : (String(r['terrain']) as Terrain),
+      terrain: r['terrain'] === null || r['terrain'] === undefined ? null : Number(r['terrain']),
     } satisfies Link);
   }
   for (const r of db.prepare('SELECT * FROM units ORDER BY id').all() as Array<Record<string, unknown>>) {

@@ -2,12 +2,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { answerAsk, askOffroadFactor } from '../engine/ask.ts';
 import { DEFAULT_PARAMS } from '../engine/params.ts';
 import { dayOfMonth, month, tickDay, year } from '../engine/tick.ts';
-import type { Link, Order, Params, Site, Theme, Unit, World } from '../engine/types.ts';
+import type { Link, Order, Params, Site, Terrain, Theme, Unit, World } from '../engine/types.ts';
 import {
   addDivision,
   addFaction,
   addLink,
   addSite,
+  addTerrain,
   demoWorld,
   divisionName,
   divisionRankRefusal,
@@ -20,11 +21,12 @@ import {
   seatRefusal,
   siteDivisionNote,
   siteName,
+  terrainLinks,
 } from '../engine/world.ts';
 import type { SandboxApi } from '../shared/ipc.ts';
 import { MapView } from './map.tsx';
 import { SettingsView, PARAM_RANGE } from './settings.tsx';
-import { DivisionTable, FactionTable, LinkTable, SiteTable, UnitTable } from './tables.tsx';
+import { DivisionTable, FactionTable, LinkTable, SiteTable, TerrainTable, TERRAIN_RANGE, UnitTable } from './tables.tsx';
 
 const api = (window as unknown as { sandbox?: SandboxApi }).sandbox;
 const SPEEDS = [1, 2, 4, 8, 16];
@@ -39,6 +41,19 @@ function siteNumberRefusal(patch: Partial<Site>): string | null {
   }
   if (patch.fortification !== undefined && !(patch.fortification >= 0 && patch.fortification <= 10)) {
     return '防御设施等级只收 0 到 10 之间的数，「' + String(patch.fortification) + '」不写回去';
+  }
+  return null;
+}
+
+/** 地貌那四个数各自的范围。写不回去就返回理由：值一个也不动，更不夹到边界。 */
+function terrainRefusal(patch: Partial<Terrain>): string | null {
+  for (const key of ['speed', 'width', 'defense', 'food'] as const) {
+    const v = patch[key];
+    if (v === undefined) continue;
+    const r = TERRAIN_RANGE[key];
+    if (!(v >= r.lo && v <= r.hi)) {
+      return r.label + '只收 ' + String(r.lo) + ' 到 ' + String(r.hi) + ' 之间的数，「' + String(v) + '」不写回去';
+    }
   }
   return null;
 }
@@ -63,7 +78,7 @@ function paramsRefusal(params: Params, patch: Partial<Params>): string | null {
   return null;
 }
 
-type View = 'factions' | 'divisions' | 'sites' | 'units' | 'links' | 'map' | 'settings';
+type View = 'factions' | 'divisions' | 'sites' | 'units' | 'links' | 'terrains' | 'map' | 'settings';
 
 const VIEWS: { id: View; label: string }[] = [
   { id: 'factions', label: '势力' },
@@ -71,6 +86,7 @@ const VIEWS: { id: View; label: string }[] = [
   { id: 'sites', label: '据点' },
   { id: 'units', label: '部队' },
   { id: 'links', label: '连接' },
+  { id: 'terrains', label: '地貌' },
   { id: 'map', label: '地图' },
   { id: 'settings', label: '设置' },
 ];
@@ -424,6 +440,61 @@ export function App() {
       }
       commit(w);
       setNote('回答记下了');
+      if (api) void api.saveWorld(w);
+    },
+    [commit],
+  );
+
+  /** 地貌表里改名字或改那四个数：越界由 terrainRefusal 挡回来，其余照写。 */
+  const editTerrain = useCallback(
+    (id: number, patch: Partial<Terrain>) => {
+      const w = worldRef.current;
+      if (!w) return;
+      const t = w.terrains.find((x) => x.id === id);
+      if (!t) return;
+      const why = terrainRefusal(patch);
+      if (why !== null) {
+        setNote(why);
+        return;
+      }
+      Object.assign(t, patch);
+      commit(w);
+    },
+    [commit],
+  );
+
+  /** 新增一档地貌：名字给个编号，四个数给占位值，随即由 User 自己调。 */
+  const addTerrainRow = useCallback(() => {
+    const w = worldRef.current;
+    if (!w) return;
+    const t = addTerrain(w, '新地貌 ' + String(w.terrains.length + 1), 1, 100, 1, 1);
+    commit(w);
+    setNote('新增地貌：' + t.name + '（#' + String(t.id) + '）');
+    if (api) void api.saveWorld(w);
+  }, [commit]);
+
+  /**
+   * 删一档地貌：有连接指着它就不许删；表里只剩一档时也不许删——连接上没填地貌时
+   * 引擎要停下来问，一档都没有就没得可问，那一问会卡住整条时间轴。
+   */
+  const deleteTerrain = useCallback(
+    (id: number) => {
+      const w = worldRef.current;
+      if (!w) return;
+      const t = w.terrains.find((x) => x.id === id);
+      if (!t) return;
+      const used = terrainLinks(w, id);
+      if (used > 0) {
+        setNote('「' + t.name + '」还有 ' + String(used) + ' 条连接指着它，先把那些连接改到别的一档，再删');
+        return;
+      }
+      if (w.terrains.length <= 1) {
+        setNote('地貌表至少留一档：连接上没填地貌时引擎要停下来问，一档都没有就没得可问');
+        return;
+      }
+      w.terrains = w.terrains.filter((x) => x.id !== id);
+      commit(w);
+      setNote('删掉了地貌「' + t.name + '」（#' + String(id) + '）');
       if (api) void api.saveWorld(w);
     },
     [commit],
@@ -794,6 +865,7 @@ export function App() {
     sites: world ? world.sites.length : 0,
     units: world ? world.units.length : 0,
     links: world ? world.links.length : 0,
+    terrains: world ? world.terrains.length : 0,
     map: world ? world.sites.length : 0,
     settings: 0,
   };
@@ -926,6 +998,14 @@ export function App() {
               />
             ) : view === 'links' ? (
               <LinkTable world={world} onEdit={editLink} onDelete={deleteLink} />
+            ) : view === 'terrains' ? (
+              <TerrainTable
+                world={world}
+                onEdit={editTerrain}
+                onDelete={deleteTerrain}
+                onAdd={addTerrainRow}
+                onNote={setNote}
+              />
             ) : view === 'settings' ? (
               <SettingsView world={world} params={params} theme={theme} onChange={writeParams} onNote={setNote} />
             ) : null}
