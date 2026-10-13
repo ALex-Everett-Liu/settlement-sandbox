@@ -12,6 +12,7 @@ import {
   newestFirst,
   PAGE_LISTS,
   pageCount,
+  pageOfId,
   pageOfRow,
   pageRows,
   rowNumber,
@@ -607,6 +608,11 @@ check('页码格只收范围内的整数', isPageNumber('2', 3) && !isPageNumber
 check('第 60 条落在第 2 页', pageOfRow(many, 60, 50) === 2);
 check('第 101 条落在第 3 页', pageOfRow(many, 101, 50) === 3);
 check('被筛掉的行返回 0', pageOfRow(many, 999, 50) === 0);
+// 结算之后「跟着刚编辑过的那一行跳页」走的是同一份算法，只是那时候手上只有一串编号。
+const manyIds = many.map((r) => r.id);
+check('按编号找页码：第 60 个在第 2 页', pageOfId(manyIds, 60, 50) === 2);
+check('按编号找页码：第 101 个在第 3 页', pageOfId(manyIds, 101, 50) === 3);
+check('不在这一串编号里就是 0', pageOfId(manyIds, 999, 50) === 0);
 
 // 据点表的「只看某一支」：这里算出来的行数与表里画的行数是同一个来源。
 const wBranch = demoWorld();

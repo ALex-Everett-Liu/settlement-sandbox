@@ -139,6 +139,11 @@ export interface ListBarProps {
   onNote: (message: string) => void;
   sort?: Sort;
   onSort?: (sort: Sort) => void;
+  /**
+   * 这一页的行按这一串编号摆（App 结算出来的那一份）。编辑期间它冻着不动，所以光标底下那一行不会跑；
+   * 还没结算过、或者日志那一段没有顺序可言时，不传它就照当前的排序现算。
+   */
+  order?: number[];
 }
 
 /** 排序按钮：选中的那一个高亮并带一个箭头，再点一下就换方向。 */
@@ -252,8 +257,9 @@ function ListBar({
 }
 
 /**
- * 这一页要画的那几行（编号、名字与数值列）。排序与分页都在 paging.ts 那一层算，
- * 与 App 找「新增那一行落在第几页」是同一份算法，所以表里看到的页就是跳过去的那一页。
+ * 这一页要画的那几行（编号、名字与数值列）。顺序、每页几条与筛都在这一层算：
+ * 顺序优先用 App 存下来的那一份（编辑期间它冻着，光标底下那一行因此不会跑），
+ * 还没结算过时按当前的排序现算一遍；名字与数值列一律从现在的世界上取，所以格子里永远是新的值。
  */
 function pageOfRows(
   world: World,
@@ -261,8 +267,15 @@ function pageOfRows(
   only: OnlyBranch | null,
   bar: ListBarProps,
 ): { total: number; rows: Row[] } {
-  const rows = tableRows(world, list, only);
-  return { total: rows.length, rows: pageRows(sortRows(rows, bar.sort ?? DEFAULT_SORT), bar.page, bar.pageSize) };
+  const live = tableRows(world, list, only);
+  const ids = bar.order ?? sortRows(live, bar.sort ?? DEFAULT_SORT).map((r) => r.id);
+  const byId = new Map(live.map((r) => [r.id, r]));
+  const rows: Row[] = [];
+  for (const id of pageRows(ids, bar.page, bar.pageSize)) {
+    const row = byId.get(id);
+    if (row !== undefined) rows.push(row);
+  }
+  return { total: ids.length, rows };
 }
 
 /**
@@ -535,7 +548,7 @@ export function FactionTable({ world, bar, onRename, onColor, onDelete, onAdd }:
           </tr>
         ) : (
           rows.map((r) => (
-            <tr key={r.id}>
+            <tr key={r.id} data-row={String(r.id)}>
               <td>
                 <input value={r.name} onChange={(e) => onRename(r.id, e.target.value)} />
               </td>
@@ -692,7 +705,7 @@ export function SiteTable({
       </thead>
       <tbody>
         {page.map(({ item: s }) => (
-          <tr key={s.id}>
+          <tr key={s.id} data-row={String(s.id)}>
             <td>
               <input value={s.name} onChange={(e) => onEdit(s.id, { name: e.target.value })} />
             </td>
@@ -918,7 +931,7 @@ export function DivisionTable({
         ) : null}
         {page.map(({ item: d, row }) => {
           return (
-            <tr key={d.id}>
+            <tr key={d.id} data-row={String(d.id)}>
               <td>
                 <input value={d.name} onChange={(e) => onRename(d.id, e.target.value)} />
               </td>
@@ -1022,7 +1035,7 @@ export function UnitTable({ world, bar, onEdit, onOrder, onPickDestination, pick
       </thead>
       <tbody>
         {page.map(({ item: u }) => (
-          <tr key={u.id}>
+          <tr key={u.id} data-row={String(u.id)}>
             <td>
               <input value={u.name} onChange={(e) => onEdit(u.id, { name: e.target.value })} />
             </td>
@@ -1133,7 +1146,7 @@ export function LinkTable({ world, bar, onEdit, onDelete }: LinkTableProps) {
           const a = world.sites.find((s) => s.id === l.a)?.name ?? String(l.a);
           const b = world.sites.find((s) => s.id === l.b)?.name ?? String(l.b);
           return (
-            <tr key={l.id}>
+            <tr key={l.id} data-row={String(l.id)}>
               <td className="ro">
                 {a}
                 {' — '}
@@ -1209,7 +1222,7 @@ export function TerrainTable({ world, bar, onEdit, onDelete, onAdd }: TerrainTab
       </thead>
       <tbody>
         {page.map(({ item: t }) => (
-          <tr key={t.id}>
+          <tr key={t.id} data-row={String(t.id)}>
             <td>
               <input value={t.name} onChange={(e) => onEdit(t.id, { name: e.target.value })} />
             </td>

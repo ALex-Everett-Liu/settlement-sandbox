@@ -163,12 +163,24 @@ export function pageRows<T>(rows: T[], page: number, pageSize: number): T[] {
   return rows.slice(start, start + size);
 }
 
+/**
+ * 某一条落在第几页（按编号找）；找不到就是 0。
+ * 结算之后的「跟着刚编辑过的那一行跳页」用它——那时候手上只有一串编号，没有整行。
+ */
+export function pageOfId(ids: number[], id: number, pageSize: number): number {
+  const at = ids.indexOf(id);
+  if (at < 0) return 0;
+  const size = pageSize < 1 ? 1 : Math.floor(pageSize);
+  return Math.floor(at / size) + 1;
+}
+
 /** 某一行落在第几页；不在这个列表里（被筛掉了）就是 0。新增之后用它跳到那一行。 */
 export function pageOfRow(rows: Row[], id: number, pageSize: number): number {
-  const index = rows.findIndex((r) => r.id === id);
-  if (index < 0) return 0;
-  const size = pageSize < 1 ? 1 : Math.floor(pageSize);
-  return Math.floor(index / size) + 1;
+  return pageOfId(
+    rows.map((r) => r.id),
+    id,
+    pageSize,
+  );
 }
 
 /** 页码格收什么字：1 到最大页之间的整数。 */

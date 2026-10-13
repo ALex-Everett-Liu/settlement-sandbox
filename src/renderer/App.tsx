@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { answerAsk, askOffroadFactor } from '../engine/ask.ts';
 import { DEFAULT_PARAMS } from '../engine/params.ts';
 import { dayOfMonth, month, tickDay, year } from '../engine/tick.ts';
@@ -34,6 +35,7 @@ import {
   newestFirst,
   PAGE_LISTS,
   pageCount,
+  pageOfId,
   pageOfRow,
   sortRows,
   tableRows,
@@ -114,6 +116,46 @@ function addedNote(text: string, page: number): string {
   return page === 0 ? text + '；它不在当前的筛选里，表里看不见它' : text + '；在第 ' + String(page) + ' 页';
 }
 
+/**
+ * 六张表外面那一层：盯着焦点，好让「正在编辑哪一张表的哪一行」有个准。
+ * 焦点进到格子里（输入框）就算编辑开始——这时候那张表冻住不重排；焦点落到表里的按钮上、
+ * 或者跑到表外面去了，就算编辑结束，可以结算顺序了。
+ */
+function EditWatcher({
+  list,
+  onBegin,
+  onEnd,
+  children,
+}: {
+  list: PageList;
+  onBegin: (list: PageList, row: number | null) => void;
+  onEnd: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      onFocus={(e) => {
+        // 焦点落到按钮上（按「＋ 新增」或者「删除」）也算编辑结束：那一下之后世界就变了，顺序要跟上。
+        const el = e.target as HTMLElement;
+        if (el.tagName !== 'INPUT' && el.tagName !== 'SELECT') {
+          onEnd();
+          return;
+        }
+        const row = el.closest('tr')?.getAttribute('data-row');
+        onBegin(list, row === null || row === undefined ? null : Number(row));
+      }}
+      onBlur={(e) => {
+        // 焦点还在这一张表里就交给 onFocus 判；跑到表外面（或落到页面本身）才算结束。
+        const next = e.relatedTarget as Node | null;
+        if (next !== null && e.currentTarget.contains(next)) return;
+        onEnd();
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
 type View = 'factions' | 'divisions' | 'sites' | 'units' | 'links' | 'terrains' | 'map' | 'settings';
 
 const VIEWS: { id: View; label: string }[] = [
@@ -145,6 +187,21 @@ export function App() {
   const [onlySite, setOnlySite] = useState<{ kind: 'site' | 'division'; id: number; name: string } | null>(null);
   // 六张表各自的页码与排序。切页签回来还停在原来那一页；筛或排序一变就回到第 1 页。
   const [lists, setLists] = useState<Record<PageList, ListState>>(emptyListStates);
+  /**
+   * 六张表显示的顺序（一串编号），由下面那个结算 effect 填。它是存下来的、不是渲染时现算的：
+   * 编辑期间冻着不动，光标底下那一行因此不会跑（见结算 effect 那一段）。
+   */
+  const [orders, setOrders] = useState<Partial<Record<PageList, number[]>>>({});
+  /**
+   * 每一张表的顺序是按什么算出来的（排序、筛、每页条数打成一个键）。冻结只挡「世界变了」这一种重算：
+   * 排序、筛、每页条数变了必须重算，否则筛完还是老顺序、行数也对不上。用 ref 不用 state：
+   * 它只是给上面那个 effect 用来比对，写它不该引起另一次渲染。
+   */
+  const orderKeys = useRef<Partial<Record<PageList, string>>>({});
+  // 焦点正在哪一张表的格子里；null 就是没有在编辑。
+  const [editing, setEditing] = useState<{ list: PageList; row: number | null } | null>(null);
+  // 刚编辑过的那一行：结算之后它要是落到别的页上，就跟着跳过去。
+  const lastEdit = useRef<{ list: PageList; id: number } | null>(null);
   // 日志那一段的页码。它不排序（本来就是新的在上），所以只有一个数。
   const [logPage, setLogPage] = useState(1);
   // 正在给哪个辖区挑治所：0 表示没有。与前面几种共用地图上那一次点选。
@@ -171,6 +228,8 @@ export function App() {
     (list: PageList, id: number): number => {
       const w = worldRef.current;
       if (!w) return 0;
+      // 新增之后要跳到新那一行上：不再跟着刚才编辑过的那一行跑（那是另一码事）。
+      lastEdit.current = null;
       const branch = onlySite === null ? null : { kind: onlySite.kind, id: onlySite.id };
       const rows = sortRows(tableRows(w, list, branch), lists[list].sort);
       const page = pageOfRow(rows, id, params.pageSize);
@@ -963,10 +1022,31 @@ export function App() {
     page: lists[list].page,
     pageSize: params.pageSize,
     sort: lists[list].sort,
-    onPage: (page: number) => setLists((s) => ({ ...s, [list]: { ...s[list], page } })),
-    onSort: (sort) => setLists((s) => ({ ...s, [list]: { ...s[list], sort, page: 1 } })),
+    // 顺序用结算出来的那一份（可能是冻着的）；还没结算过时表里会按当前的排序现算一遍。
+    order: orders[list],
+    onPage: (page: number) => {
+      // 明确换页之后不再跟着刚才编辑过的那一行跑。
+      lastEdit.current = null;
+      setLists((s) => ({ ...s, [list]: { ...s[list], page } }));
+    },
+    onSort: (sort) => {
+      lastEdit.current = null;
+      setLists((s) => ({ ...s, [list]: { ...s[list], sort, page: 1 } }));
+    },
     onNote: setNote,
   });
+
+  /**
+   * 焦点进了哪一张表的格子：这一张表从此冻住，直到焦点离开（见上面那个结算 effect）。
+   * row 是那一行的编号（表里每一行都带 data-row），光标不在某一行上（比如页码格）时是 null。
+   */
+  const beginEdit = useCallback((list: PageList, row: number | null) => {
+    setEditing({ list, row });
+    if (row !== null) lastEdit.current = { list, id: row };
+  }, []);
+
+  /** 焦点离开格子：那张表解冻，下一次渲染就把顺序结算一遍。 */
+  const endEdit = useCallback(() => setEditing(null), []);
 
   /**
    * 页码落空：删条目、改小每页条数之后，当前页码可能超出最大页。
@@ -995,6 +1075,44 @@ export function App() {
     }
     setNote(over.join('；'));
   }, [world, lists, logPage, onlySite, params.pageSize]);
+
+  /** 当前页签对应哪一张表；地图与设置这两个页签下面是 null（没有表要结算顺序）。 */
+  const visibleList: PageList | null =
+    view === 'map' || view === 'settings' ? null : view;
+
+  /**
+   * 表里显示的顺序是存下来的（一串编号），不是渲染时现算的。编辑期间（焦点在本表的格子里）世界怎么变
+   * 都不重排、也不换页——不然正在录入的那一行会在光标底下跑，跨过页边界时还会从这一页消失、把焦点一起丢掉。
+   * 冻结只挡这一种重算：换排序或方向、换筛选、改每页条数都换了一个新的键，那时照常重算。
+   * 结算完，刚编辑过的那一行要是落到别的页上，跟着它跳过去并把页数写进说明行（与「新增一行」同一条规矩）。
+   */
+  useEffect(() => {
+    if (world === null || visibleList === null) return;
+    const branch = onlySite === null ? null : { kind: onlySite.kind, id: onlySite.id };
+    const key = JSON.stringify([lists[visibleList].sort, branch, params.pageSize]);
+    // 正在编辑这一张，而且排序、筛、每页条数都没动：冻着，一个字也不重排。
+    if (editing !== null && editing.list === visibleList && orderKeys.current[visibleList] === key) return;
+
+    const rows = tableRows(world, visibleList, branch);
+    const ids = sortRows(rows, lists[visibleList].sort).map((r) => r.id);
+    orderKeys.current[visibleList] = key;
+    setOrders((s) => ({ ...s, [visibleList]: ids }));
+
+    const was = lastEdit.current;
+    if (was === null || was.list !== visibleList) return;
+    lastEdit.current = null;
+    const page = pageOfId(ids, was.id, params.pageSize);
+    if (page === 0 || page === lists[visibleList].page) return;
+    setLists((s) => ({ ...s, [visibleList]: { ...s[visibleList], page } }));
+    setNote(
+      '「' + (rows.find((r) => r.id === was.id)?.name ?? '') + '」排到第 ' + String(page) + ' 页',
+    );
+  }, [world, visibleList, editing, lists, onlySite, params.pageSize]);
+
+  // 切页签之后不再跟着上一张表刚编辑过的那一行跑。
+  useEffect(() => {
+    lastEdit.current = null;
+  }, [view]);
 
   const calendar = world
     ? '第 ' + year(world, params) + ' 年 ' + month(world, params) + ' 月 ' + dayOfMonth(world, params) + ' 日'
@@ -1102,67 +1220,80 @@ export function App() {
               />
             </div>
             {view === 'factions' ? (
-              <FactionTable
-                world={world}
-                bar={bar('factions')}
-                onRename={renameFaction}
-                onColor={editFactionColor}
-                onDelete={deleteFaction}
-                onAdd={addFactionRow}
-              />
+              <EditWatcher list="factions" onBegin={beginEdit} onEnd={endEdit}>
+                <FactionTable
+                  world={world}
+                  bar={bar('factions')}
+                  onRename={renameFaction}
+                  onColor={editFactionColor}
+                  onDelete={deleteFaction}
+                  onAdd={addFactionRow}
+                />
+              </EditWatcher>
             ) : view === 'divisions' ? (
-              <DivisionTable
-                world={world}
-                bar={bar('divisions')}
-                onRename={renameDivision}
-                onRank={editDivisionRank}
-                onParent={editDivisionParent}
-                onSeat={startSeatPick}
-                pickingSeat={seatTarget === 0 ? null : seatTarget}
-                onDelete={deleteDivision}
-                onAdd={addDivisionRow}
-              />
+              <EditWatcher list="divisions" onBegin={beginEdit} onEnd={endEdit}>
+                <DivisionTable
+                  world={world}
+                  bar={bar('divisions')}
+                  onRename={renameDivision}
+                  onRank={editDivisionRank}
+                  onParent={editDivisionParent}
+                  onSeat={startSeatPick}
+                  pickingSeat={seatTarget === 0 ? null : seatTarget}
+                  onDelete={deleteDivision}
+                  onAdd={addDivisionRow}
+                />
+              </EditWatcher>
             ) : view === 'sites' ? (
-              <SiteTable
-                world={world}
-                bar={bar('sites')}
-                onEdit={editSite}
-                startSite={linkFrom === 0 ? null : linkFrom}
-                onPick={pickSite}
-                pickingParent={parentTarget === 0 ? null : parentTarget}
-                onPickParent={startParentPick}
-                onLocate={locateSite}
-                onDelete={deleteSite}
-                only={onlySite}
-                onOnly={(item) => {
-                  setOnlySite(item);
-                  // 筛完之后行换了一批，从第一页看起。
-                  setLists((s) => ({ ...s, sites: { ...s.sites, page: 1 } }));
-                }}
-                onEditLevel={editSiteLevel}
-                onEditDivision={editSiteDivision}
-              />
+              <EditWatcher list="sites" onBegin={beginEdit} onEnd={endEdit}>
+                <SiteTable
+                  world={world}
+                  bar={bar('sites')}
+                  onEdit={editSite}
+                  startSite={linkFrom === 0 ? null : linkFrom}
+                  onPick={pickSite}
+                  pickingParent={parentTarget === 0 ? null : parentTarget}
+                  onPickParent={startParentPick}
+                  onLocate={locateSite}
+                  onDelete={deleteSite}
+                  only={onlySite}
+                  onOnly={(item) => {
+                    lastEdit.current = null;
+                    setOnlySite(item);
+                    // 筛完之后行换了一批，从第一页看起。
+                    setLists((s) => ({ ...s, sites: { ...s.sites, page: 1 } }));
+                  }}
+                  onEditLevel={editSiteLevel}
+                  onEditDivision={editSiteDivision}
+                />
+              </EditWatcher>
             ) : view === 'units' ? (
-              <UnitTable
-                world={world}
-                bar={bar('units')}
-                onEdit={editUnit}
-                onOrder={editQueue}
-                onPickDestination={startOrderPick}
-                pickingUnit={orderTarget === 0 ? null : orderTarget}
-                onLocate={locateUnit}
-                onDelete={deleteUnit}
-              />
+              <EditWatcher list="units" onBegin={beginEdit} onEnd={endEdit}>
+                <UnitTable
+                  world={world}
+                  bar={bar('units')}
+                  onEdit={editUnit}
+                  onOrder={editQueue}
+                  onPickDestination={startOrderPick}
+                  pickingUnit={orderTarget === 0 ? null : orderTarget}
+                  onLocate={locateUnit}
+                  onDelete={deleteUnit}
+                />
+              </EditWatcher>
             ) : view === 'links' ? (
-              <LinkTable world={world} bar={bar('links')} onEdit={editLink} onDelete={deleteLink} />
+              <EditWatcher list="links" onBegin={beginEdit} onEnd={endEdit}>
+                <LinkTable world={world} bar={bar('links')} onEdit={editLink} onDelete={deleteLink} />
+              </EditWatcher>
             ) : view === 'terrains' ? (
-              <TerrainTable
-                world={world}
-                bar={bar('terrains')}
-                onEdit={editTerrain}
-                onDelete={deleteTerrain}
-                onAdd={addTerrainRow}
-              />
+              <EditWatcher list="terrains" onBegin={beginEdit} onEnd={endEdit}>
+                <TerrainTable
+                  world={world}
+                  bar={bar('terrains')}
+                  onEdit={editTerrain}
+                  onDelete={deleteTerrain}
+                  onAdd={addTerrainRow}
+                />
+              </EditWatcher>
             ) : view === 'settings' ? (
               <SettingsView world={world} params={params} theme={theme} onChange={writeParams} onNote={setNote} />
             ) : null}
