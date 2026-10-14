@@ -1008,10 +1008,18 @@ interface UnitTableProps {
   onLocate: (id: number) => void;
   /** 点「删除」（第二下）：引擎正停在这支部队断粮怎么办那一问上时会挡回来。 */
   onDelete: (id: number) => void;
+  /** 点表末的「＋ 新增部队」：参数是它出生在哪座据点；0 表示放到野外。 */
+  onAdd: (siteId: number) => void;
 }
 
-export function UnitTable({ world, bar, onEdit, onOrder, onPickDestination, pickingUnit, onLocate, onDelete }: UnitTableProps) {
-  if (world.units.length === 0) return <p className="dim">还没有部队。</p>;
+export function UnitTable({
+  world, bar, onEdit, onOrder, onPickDestination, pickingUnit, onLocate, onDelete, onAdd,
+}: UnitTableProps) {
+  // 新部队生在哪座据点：表末那一行挑，用按名字过滤的挑选框，不是下拉菜单——
+  // 据点上千座时下拉挑不动（势力与辖区那两处拆掉下拉是同一条理由）。
+  // 挑中的那一座被删掉、或者本来就没有据点时，回落到第一座。
+  const [birth, setBirth] = useState<number>(world.sites[0]?.id ?? 0);
+  const birthSite = world.sites.find((s) => s.id === birth) ?? world.sites[0] ?? null;
 
   const byId = new Map(world.units.map((u) => [u.id, u]));
   const { total, page } = pageOfObjects(world, 'units', null, bar, byId);
@@ -1019,6 +1027,7 @@ export function UnitTable({ world, bar, onEdit, onOrder, onPickDestination, pick
   return (
     <>
       <ListBar total={total} what="部队表" bar={bar} />
+      {world.units.length === 0 ? <p className="dim">还没有部队。</p> : null}
       <table>
       <thead>
         <tr>
@@ -1108,6 +1117,31 @@ export function UnitTable({ world, bar, onEdit, onOrder, onPickDestination, pick
           </tr>
         ))}
       </tbody>
+      <tfoot>
+        <tr>
+          <td colSpan={9}>
+            <div className="row">
+              {birthSite === null ? (
+                <span className="dim small">
+                  还没有据点：新建的部队先放在地图正中那一点（野外扎营），势力留空，之后再改
+                </span>
+              ) : (
+                <>
+                  <span className="dim small">生在哪座据点</span>
+                  <NamePicker
+                    value={birthSite.name}
+                    items={world.sites.map((s) => ({ id: s.id, name: s.name, tag: '#' + String(s.id) }))}
+                    label="据点"
+                    onPick={(item) => setBirth(item.id)}
+                  />
+                  <span className="dim small">（它的势力就是那座据点的势力）</span>
+                </>
+              )}
+              <button onClick={() => onAdd(birthSite === null ? 0 : birthSite.id)}>＋ 新增部队</button>
+            </div>
+          </td>
+        </tr>
+      </tfoot>
       </table>
     </>
   );

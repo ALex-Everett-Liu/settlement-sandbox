@@ -10,6 +10,7 @@ import {
   addLink,
   addSite,
   addTerrain,
+  addUnit,
   colorRefusal,
   demoWorld,
   divisionName,
@@ -589,6 +590,36 @@ export function App() {
     setNote(addedNote('新增地貌：' + t.name + '（#' + String(t.id) + '）', jumpToRow('terrains', t.id)));
     if (api) void api.saveWorld(w);
   }, [commit, jumpToRow]);
+
+  /**
+   * 表末的「＋ 新增部队」：生在哪座据点由那一行的挑选框给（0 表示野外）。
+   * 势力跟着出生那座据点的势力走；没有出生据点时势力留空（编号 0，表里写「势力 0」），
+   * 位置放在地图正中那一点。驻军不另建——派进城、走到的部队就是那座城的驻军。
+   */
+  const addUnitRow = useCallback(
+    (siteId: number) => {
+      const w = worldRef.current;
+      if (!w) return;
+      const site = w.sites.find((s) => s.id === siteId) ?? null;
+      const u = addUnit(w, {
+        faction: site === null ? 0 : site.faction,
+        name: '新部队 ' + String(w.units.length + 1),
+        troops: 1000,
+        training: 50,
+        organization: 100,
+        place: site === null
+          ? { kind: 'camp', x: params.mapWidth / 2, y: params.mapHeight / 2 }
+          : { kind: 'site', site: site.id },
+        carriedFood: 0,
+        foodPolicy: null,
+        queue: [],
+      });
+      commit(w);
+      setNote(addedNote('新增部队：' + u.name + '（#' + String(u.id) + '）', jumpToRow('units', u.id)));
+      if (api) void api.saveWorld(w);
+    },
+    [commit, jumpToRow, params],
+  );
 
   /**
    * 删一档地貌：有连接指着它就不许删；表里只剩一档时也不许删——连接上没填地貌时
@@ -1278,6 +1309,7 @@ export function App() {
                   pickingUnit={orderTarget === 0 ? null : orderTarget}
                   onLocate={locateUnit}
                   onDelete={deleteUnit}
+                  onAdd={addUnitRow}
                 />
               </EditWatcher>
             ) : view === 'links' ? (
