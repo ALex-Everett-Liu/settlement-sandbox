@@ -157,7 +157,7 @@ function EditWatcher({
   );
 }
 
-type View = 'factions' | 'divisions' | 'sites' | 'units' | 'links' | 'terrains' | 'map' | 'settings';
+type View = 'factions' | 'divisions' | 'sites' | 'units' | 'links' | 'terrains' | 'log' | 'map' | 'settings';
 
 const VIEWS: { id: View; label: string }[] = [
   { id: 'factions', label: '势力' },
@@ -166,6 +166,7 @@ const VIEWS: { id: View; label: string }[] = [
   { id: 'units', label: '部队' },
   { id: 'links', label: '连接' },
   { id: 'terrains', label: '地貌' },
+  { id: 'log', label: '日志' },
   { id: 'map', label: '地图' },
   { id: 'settings', label: '设置' },
 ];
@@ -1107,9 +1108,9 @@ export function App() {
     setNote(over.join('；'));
   }, [world, lists, logPage, onlySite, params.pageSize]);
 
-  /** 当前页签对应哪一张表；地图与设置这两个页签下面是 null（没有表要结算顺序）。 */
+  /** 当前页签对应哪一张表；地图、日志与设置这三个页签下面是 null（没有表要结算顺序）。 */
   const visibleList: PageList | null =
-    view === 'map' || view === 'settings' ? null : view;
+    view === 'map' || view === 'log' || view === 'settings' ? null : view;
 
   /**
    * 表里显示的顺序是存下来的（一串编号），不是渲染时现算的。编辑期间（焦点在本表的格子里）世界怎么变
@@ -1155,6 +1156,8 @@ export function App() {
     units: world ? world.units.length : 0,
     links: world ? world.links.length : 0,
     terrains: world ? world.terrains.length : 0,
+    // 日志页签上的数是行数：时间轴跑起来它自己会涨。
+    log: world ? world.log.length : 0,
     map: world ? world.sites.length : 0,
     settings: 0,
   };
@@ -1326,25 +1329,27 @@ export function App() {
                   onAdd={addTerrainRow}
                 />
               </EditWatcher>
+            ) : view === 'log' ? (
+              /* 日志：引擎自己往里面写行（逐日推进与三种问答的写回），所以它不跟哪一张表走。
+                 这一段原来是摆在页签切换区之外的，于是每个页签下面都拖着它；现在它自己一个页签。 */
+              <section className="log">
+                <h3>日志（新的在上）</h3>
+                <Pager total={logTotal} what="日志" bar={logBar} />
+                {logShown.length === 0 ? (
+                  <p className="dim">还没有日志。</p>
+                ) : (
+                  <ol>
+                    {logShown.map((line, i) => (
+                      <li key={String(logPage) + '-' + String(i)}>{line}</li>
+                    ))}
+                  </ol>
+                )}
+              </section>
             ) : view === 'settings' ? (
               <SettingsView world={world} params={params} theme={theme} onChange={writeParams} onNote={setNote} />
             ) : null}
           </>
         )}
-
-        <section className="log">
-          <h3>日志（新的在上）</h3>
-          <Pager total={logTotal} what="日志" bar={logBar} />
-          {logShown.length === 0 ? (
-            <p className="dim">还没有日志。</p>
-          ) : (
-            <ol>
-              {logShown.map((line, i) => (
-                <li key={String(logPage) + '-' + String(i)}>{line}</li>
-              ))}
-            </ol>
-          )}
-        </section>
       </main>
 
       {world && world.pending ? (
