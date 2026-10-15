@@ -23,9 +23,21 @@ export function round2(v: number): number {
   return Math.round(v * 100) / 100;
 }
 
-/** 一位小数：发展度、防御设施等级、民心、稳定度这些格子里显示用。 */
+/** 一位小数：发展度、防御设施等级、民心、稳定度这些显示用。 */
 export function round1(v: number): number {
   return Math.round(v * 10) / 10;
+}
+
+/**
+ * 数字格显示用：显示存下来的那个数，浮点尾巴按 `decimals` 位封顶（默认三位），
+ * 不管尾巴直接印会印出 99.16666666666667 这种。位数本身不设限，0.55 这类两位的照原样显示；
+ * 倍数下界那一格的下限是 0.0001，所以它单独传四位。
+ * 原先一律按一位小数显示，于是 0.55 写成 0.6、倍数下界的 0.02 写成 0——格子里写的数与
+ * 世界里的数对不上，User 从那一格再改一次就会把真的那个数改掉。
+ */
+export function cellText(v: number, decimals = 3): string {
+  if (!Number.isFinite(v)) return String(v);
+  return String(Number(v.toFixed(decimals)));
 }
 
 /** 一个坐标点怎么写。 */

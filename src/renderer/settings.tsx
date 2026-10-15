@@ -5,15 +5,17 @@ import { NumberCell } from './tables.tsx';
 /**
  * 这几个数各自的上下限与中文名。越界的写法一律挡回来（见 App 的 paramsRefusal），
  * 由界面把理由写进说明行，等 User 自己改一个数——不夹到边界，也不替 User 改数。
+ * 小数位不设限：带小数的格子 `step` 一律 0.01（倍数下界取它自己的下限 0.0001），
+ * 每页几条是行数，仍然只收整数。
  */
 export const PARAM_RANGE: Record<
   'mapWidth' | 'mapHeight' | 'zoomMin' | 'zoomMax' | 'pageSize',
   { label: string; lo: number; hi: number; step: number }
 > = {
-  mapWidth: { label: '地图宽', lo: 100, hi: 1000000, step: 1 },
-  mapHeight: { label: '地图高', lo: 100, hi: 1000000, step: 1 },
-  zoomMin: { label: '倍数下界', lo: 0.0001, hi: 1, step: 0.001 },
-  zoomMax: { label: '倍数上界', lo: 0.01, hi: 100, step: 0.5 },
+  mapWidth: { label: '地图宽', lo: 100, hi: 1000000, step: 0.01 },
+  mapHeight: { label: '地图高', lo: 100, hi: 1000000, step: 0.01 },
+  zoomMin: { label: '倍数下界', lo: 0.0001, hi: 1, step: 0.0001 },
+  zoomMax: { label: '倍数上界', lo: 0.01, hi: 100, step: 0.01 },
   pageSize: { label: '每页几条', lo: 1, hi: 1000, step: 1 },
 };
 
@@ -114,6 +116,7 @@ export function SettingsView({ world, params, theme, onChange, onNote }: Setting
                 min={PARAM_RANGE.zoomMin.lo}
                 max={PARAM_RANGE.zoomMin.hi}
                 step={PARAM_RANGE.zoomMin.step}
+                decimals={4}
                 label="倍数下界"
                 title="最多缩到这么小。0.0001 到 1 之间，而且不能大于倍数上界。"
                 onCommit={(v) => onChange({ zoomMin: v })}

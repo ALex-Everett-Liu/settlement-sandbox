@@ -6,7 +6,7 @@ import { useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { Link, Order, Site, Terrain, Unit, World } from '../engine/types.ts';
 import { colorRefusal, divisionName, factionColor, linkLength, normalizeColor, terrainLinks, terrainName } from '../engine/world.ts';
-import { factionName, garrisonText, orderText, placeText, round1, round2, siteName } from './format.ts';
+import { cellText, factionName, garrisonText, orderText, placeText, round1, round2, siteName } from './format.ts';
 import {
   DEFAULT_SORT,
   isPageNumber,
@@ -21,16 +21,17 @@ import type { OnlyBranch, PageList, Row, Sort } from './paging.ts';
 /**
  * 地貌那四个数各自的上下限、小数位与中文名。越界的写法一律挡回来（见 App 的 terrainRefusal），
  * 由界面把理由写进说明行，等 User 自己改一个数——不夹到边界。
+ * 小数位不设限：`step` 一律 0.01，两位小数随便填（原先只留一位，山地 0.55 会被显示成 0.6）。
  * 速度系数的下限是 0.01 而不是 0：0 或负数会让行军天数变成无穷，部队就永远走不到，不声不响地卡住。
  */
 export const TERRAIN_RANGE: Record<
   'speed' | 'width' | 'defense' | 'food',
   { label: string; lo: number; hi: number; step: number }
 > = {
-  speed: { label: '行军速度系数', lo: 0.01, hi: 100, step: 0.05 },
-  width: { label: '战场宽度', lo: 0, hi: 100000, step: 1 },
-  defense: { label: '守方加成', lo: 0, hi: 100, step: 0.05 },
-  food: { label: '粮草产出系数', lo: 0, hi: 100, step: 0.05 },
+  speed: { label: '行军速度系数', lo: 0.01, hi: 100, step: 0.01 },
+  width: { label: '战场宽度', lo: 0, hi: 100000, step: 0.01 },
+  defense: { label: '守方加成', lo: 0, hi: 100, step: 0.01 },
+  food: { label: '粮草产出系数', lo: 0, hi: 100, step: 0.01 },
 };
 
 function toNumber(text: string, fallback: number): number {
@@ -39,26 +40,32 @@ function toNumber(text: string, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
-/** 这个字是不是一个落在 [min, max] 里的数。 */
-function inRange(text: string, min: number, max: number): boolean {
+/** 这个字是不是一个落在 [min, max] 里的数。上下限不给（undefined）就是不限。 */
+function inRange(text: string, min: number | undefined, max: number | undefined): boolean {
   if (text.trim() === '') return false;
   const n = Number(text);
-  return Number.isFinite(n) && n >= min && n <= max;
+  if (!Number.isFinite(n)) return false;
+  if (min !== undefined && n < min) return false;
+  if (max !== undefined && n > max) return false;
+  return true;
 }
 
 /**
- * 数字格：只有落进 [min, max] 的数才写回世界。写不进去的值留在格子里并标红，
+ * 数字格：只有落进 [min, max] 的数才写回世界（上下限不给就是不限）。写不进去的值留在格子里并标红，
  * 由 onNote 报一句，等 User 自己改回来——不夹到边界，也不替 User 改数。
  * 草稿在输入期间一直留着（不然敲「12.」时最后那个小数点会被顶掉），焦点离开时才与世界的值对齐；
  * 越界的草稿离开焦点也留着，直到改成一个写得回去的数。
  */
 export function NumberCell({
-  value, min, max, step, label, title, whole, onCommit, onNote,
+  value, min, max, step, decimals, label, title, whole, onCommit, onNote,
 }: {
   value: number;
-  min: number;
-  max: number;
+  /** 上下限：两个都不给就是不限（民心、稳定度、训练度、组织度、随身粮草按 User 的决定不设限）。 */
+  min?: number;
+  max?: number;
   step: number;
+  /** 显示时浮点尾巴封到几位，默认三位；下限是 0.0001 的那一格传四位。 */
+  decimals?: number;
   label: string;
   title: string;
   /** 只收整数时传 true：小数也算写不回去，理由里写「整数」。 */
@@ -67,9 +74,20 @@ export function NumberCell({
   onNote: (message: string) => void;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
-  const text = draft ?? String(round1(value));
+  // 显示走 `cellText`：只留一位小数会把 0.55 写成 0.6、把 0.02 写成 0。
+  const text = draft ?? cellText(value, decimals);
   const ok = (t: string) => inRange(t, min, max) && (whole !== true || Number.isInteger(Number(t)));
   const bad = draft !== null && !ok(draft);
+  // 理由里那句「收什么」：有上下限就念出来，没有就只说「一个数」。
+  const what = whole === true ? '整数' : '数';
+  const bound =
+    min !== undefined && max !== undefined
+      ? String(min) + ' 到 ' + String(max) + ' 之间的' + what
+      : min !== undefined
+        ? '不小于 ' + String(min) + ' 的' + what
+        : max !== undefined
+          ? '不大于 ' + String(max) + ' 的' + what
+          : '一个' + what;
 
   return (
     <input
@@ -86,8 +104,7 @@ export function NumberCell({
           return;
         }
         onNote(
-          label + '只收 ' + String(min) + ' 到 ' + String(max) + ' 之间的' +
-            (whole === true ? '整数' : '数') + '：' +
+          label + '只收' + bound + '：' +
             (t.trim() === '' ? '格子还空着' : '「' + t + '」写不回去') + '。改一个数再写，别的不动。',
         );
       }}
@@ -714,9 +731,9 @@ export function SiteTable({
                 value={s.development}
                 min={0}
                 max={100}
-                step={0.1}
+                step={0.01}
                 label="发展度"
-                title="发展度 0–100，一位小数：钱粮产出与 upkeep 按它算，地图上记号的大小也按它。"
+                title="发展度 0–100，两位小数：钱粮产出与 upkeep 按它算，地图上记号的大小也按它。"
                 onCommit={(v) => onEdit(s.id, { development: v })}
                 onNote={bar.onNote}
               />
@@ -726,9 +743,9 @@ export function SiteTable({
                 value={s.fortification}
                 min={0}
                 max={10}
-                step={0.1}
+                step={0.01}
                 label="防御设施等级"
-                title="防御设施等级 0–10，一位小数。现在只由 User 声明，不参与结算（战斗还没做）。"
+                title="防御设施等级 0–10，两位小数。现在只由 User 声明，不参与结算（战斗还没做）。"
                 onCommit={(v) => onEdit(s.id, { fortification: v })}
                 onNote={bar.onNote}
               />
@@ -741,19 +758,23 @@ export function SiteTable({
               />
             </td>
             <td>
-              <input
-                type="number"
-                step="0.1"
-                value={round1(s.morale)}
-                onChange={(e) => onEdit(s.id, { morale: toNumber(e.target.value, s.morale) })}
+              <NumberCell
+                value={s.morale}
+                step={0.01}
+                label="民心"
+                title="民心：文档写着 0–100%，眼下不设上下限，只要求填一个数。"
+                onCommit={(v) => onEdit(s.id, { morale: v })}
+                onNote={bar.onNote}
               />
             </td>
             <td>
-              <input
-                type="number"
-                step="0.1"
-                value={round1(s.stability)}
-                onChange={(e) => onEdit(s.id, { stability: toNumber(e.target.value, s.stability) })}
+              <NumberCell
+                value={s.stability}
+                step={0.01}
+                label="稳定度"
+                title="稳定度：文档写着 0–100%，眼下不设上下限，只要求填一个数。"
+                onCommit={(v) => onEdit(s.id, { stability: v })}
+                onNote={bar.onNote}
               />
             </td>
             <td>
@@ -1071,28 +1092,34 @@ export function UnitTable({
               />
             </td>
             <td>
-              <input
-                type="number"
-                step="0.1"
-                value={round1(u.training)}
-                onChange={(e) => onEdit(u.id, { training: toNumber(e.target.value, u.training) })}
+              <NumberCell
+                value={u.training}
+                step={0.01}
+                label="训练度"
+                title="训练度：文档写着 0–100，跟着部队走、换地方不掉；眼下不设上下限，只要求填一个数。"
+                onCommit={(v) => onEdit(u.id, { training: v })}
+                onNote={bar.onNote}
               />
             </td>
             <td>
-              <input
-                type="number"
-                step="0.1"
-                value={round1(u.organization)}
-                onChange={(e) => onEdit(u.id, { organization: toNumber(e.target.value, u.organization) })}
+              <NumberCell
+                value={u.organization}
+                step={0.01}
+                label="组织度"
+                title="组织度：文档写着 0–100；眼下不设上下限，只要求填一个数。"
+                onCommit={(v) => onEdit(u.id, { organization: v })}
+                onNote={bar.onNote}
               />
             </td>
             <td className="ro">{placeText(world, u.place)}</td>
             <td>
-              <input
-                type="number"
-                step="0.1"
-                value={round1(u.carriedFood)}
-                onChange={(e) => onEdit(u.id, { carriedFood: toNumber(e.target.value, u.carriedFood) })}
+              <NumberCell
+                value={u.carriedFood}
+                step={0.01}
+                label="随身粮草"
+                title="随身粮草：出城时从所在据点领，路上按天吃；眼下不设上下限，只要求填一个数。"
+                onCommit={(v) => onEdit(u.id, { carriedFood: v })}
+                onNote={bar.onNote}
               />
             </td>
             <td>
@@ -1189,11 +1216,13 @@ export function LinkTable({ world, bar, onEdit, onDelete }: LinkTableProps) {
               </td>
               <td className="ro">{Math.round(linkLength(world, l) * 10) / 10}</td>
               <td>
-                <input
-                  type="number"
-                  step="0.05"
+                <NumberCell
                   value={l.detour}
-                  onChange={(e) => onEdit(l.id, { detour: toNumber(e.target.value, l.detour) })}
+                  step={0.01}
+                  label="绕行系数"
+                  title="绕行系数：长度 = 两端直线距离 × 它，默认 1.0。眼下不设上下限，只要求填一个数。"
+                  onCommit={(v) => onEdit(l.id, { detour: v })}
+                  onNote={bar.onNote}
                 />
               </td>
               <td>
