@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { answerAsk, askOffroadFactor } from '../engine/ask.ts';
 import { DEFAULT_PARAMS } from '../engine/params.ts';
@@ -29,6 +29,9 @@ import {
   terrainLinks,
 } from '../engine/world.ts';
 import type { SandboxApi } from '../shared/ipc.ts';
+import { markHints } from './hintdom.ts';
+import { BAR_CODES, MODE_KEYS, resolveBuffer, TOP_CODES, VIEWS } from './hotkeys.ts';
+import type { View } from './hotkeys.ts';
 import { MapView } from './map.tsx';
 import {
   emptyListStates,
@@ -157,19 +160,7 @@ function EditWatcher({
   );
 }
 
-type View = 'factions' | 'divisions' | 'sites' | 'units' | 'links' | 'terrains' | 'log' | 'map' | 'settings';
-
-const VIEWS: { id: View; label: string }[] = [
-  { id: 'factions', label: '势力' },
-  { id: 'divisions', label: '辖区' },
-  { id: 'sites', label: '据点' },
-  { id: 'units', label: '部队' },
-  { id: 'links', label: '连接' },
-  { id: 'terrains', label: '地貌' },
-  { id: 'log', label: '日志' },
-  { id: 'map', label: '地图' },
-  { id: 'settings', label: '设置' },
-];
+// 页签的名字与热键都在 hotkeys.ts 里，`View` 与 `VIEWS` 从那边来：画出来的按钮与挂上去的标签不会各写各的。
 
 export function App() {
   const [world, setWorld] = useState<World | null>(null);
@@ -211,6 +202,16 @@ export function App() {
   // 「定位」请求：n 是次数，同一个目标按两次也要重新定位一次。
   const [focus, setFocus] = useState<{ kind: 'site' | 'unit'; id: number; n: number } | null>(null);
   const worldRef = useRef<World | null>(null);
+  // 热键模式：Alt+K 进/出。打开之后字母与数字归它吃，敲满一个标签就跳到那一处。
+  const [hmOn, setHmOn] = useState(false);
+  // 标签浮窗的隐/现：进模式时是显示着的，` 收起再按出来。
+  const [hmMarks, setHmMarks] = useState(true);
+  // 已经敲下去的那一截（`` 空 / `s` / `1` / `10`）。
+  const [hmBuf, setHmBuf] = useState('');
+  /** 这一页现在有哪些标签，由 markHints 每次渲染之后填；判「半截」「没有这个」靠它。 */
+  const hmCodes = useRef<string[]>([]);
+  /** 挂标签的范围：整个 .app（页签在 header 里，表格在 main 里）。 */
+  const appRef = useRef<HTMLDivElement | null>(null);
 
   // The theme rides in the params table, so it is stored in this world's database.
   // A database written before the field existed has no theme; that reads as light.
@@ -1034,6 +1035,138 @@ export function App() {
   }, [linkFrom, orderTarget, parentTarget, seatTarget, cancelPick]);
 
   /**
+   * 按下一个完整的标签：按钮就当点了一下（只点了它，焦点不跟着走，所以还能接着敲下一个），
+   * 输入口就把焦点放进去并全选——不全选的话接着敲的字会接在那个数后面。
+   * 颜色格那种一格两个输入件的，焦点给第一个（手打 #rrggbb 那个）；勾选框（地形层）按一下就算换过来。
+   * 页签切走之后地图那一块还在 .hidden 里，同一个标签优先找看得见的那一处。
+   */
+  const hitHint = useCallback((code: string) => {
+    const all = appRef.current?.querySelectorAll<HTMLElement>('[data-hint="' + code + '"]');
+    const el = all === undefined ? null : ([...all].find((x) => x.closest('.hidden') === null) ?? null);
+    if (el === null) {
+      setNote('热键：' + code + ' 那一处现在不在了');
+      return;
+    }
+    if (el.tagName === 'BUTTON') {
+      el.click();
+      return;
+    }
+    const field = el.matches('input, select, textarea')
+      ? el
+      : el.querySelector<HTMLElement>('input, select, textarea');
+    const target = field ?? el;
+    if (target instanceof HTMLInputElement && target.type === 'checkbox') {
+      target.click();
+      return;
+    }
+    target.focus();
+    if (target instanceof HTMLInputElement) {
+      // 数字格与页码格选不了全部（type=number 不支持 setSelectionRange），焦点到了就够了。
+      try {
+        target.select();
+      } catch {
+        /* 选不了全部就只把焦点放上去 */
+      }
+    }
+  }, []);
+
+  /**
+   * 热键模式的按键，三条规矩：
+   * 1. Alt+K 任何时候都管用，包括焦点在格子里的时候——进/出这个模式。
+   * 2. 焦点在格子里时，除了 Alt+K，别的键全让给那一格：↑↓、回车、Esc 都还是格子自己的；
+   *    Esc 在这一格不是候选列表的时候把焦点收回来，人就回到模式里。
+   * 3. 其余时候这个模式吃掉字母、数字与退格：敲满一个标签就跳过去，半截就等着，对不上就清空并说一句。
+   * 引擎停在问答框上、或者正在地图上挑起点之类的的时候，键全让给那两处（Alt+K 仍然可用）。
+   */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const toggle = e.key.toLowerCase() === MODE_KEYS.toggle;
+      if (e.altKey && !e.ctrlKey && !e.metaKey && toggle) {
+        e.preventDefault();
+        // 进来的时候把缓冲清空、浮窗放出：每次进这个模式都是同一个起点。
+        if (!hmOn) {
+          setHmBuf('');
+          setHmMarks(true);
+        }
+        setHmOn(!hmOn);
+        return;
+      }
+      if (!hmOn || world === null) return;
+      if (world.pending !== null) return;
+      if (linkFrom !== 0 || orderTarget !== 0 || parentTarget !== 0 || seatTarget !== 0) return;
+
+      const el = document.activeElement;
+      const inField =
+        el instanceof HTMLElement &&
+        (el.tagName === 'INPUT' || el.tagName === 'SELECT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+      if (inField) {
+        // 候选列表开着的时候，Esc 先关列表；列表关着的时候，Esc 把焦点从这一格收回来。
+        if (e.key === 'Escape' && document.querySelector('.picklist') === null) {
+          (el as HTMLElement).blur();
+          setHmBuf('');
+          e.preventDefault();
+        }
+        return;
+      }
+
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.isComposing || e.key === 'Process') return;
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setHmBuf('');
+        return;
+      }
+      if (e.key === 'Backspace') {
+        e.preventDefault();
+        setHmBuf((b) => b.slice(0, -1));
+        return;
+      }
+      if (e.key === MODE_KEYS.marks) {
+        e.preventDefault();
+        setHmMarks((s) => !s);
+        return;
+      }
+      if (e.key.length !== 1) return;
+      const ch = e.key.toLowerCase();
+      if (!/^[a-z0-9]$/.test(ch)) return;
+      e.preventDefault();
+      const next = hmBuf + ch;
+      const r = resolveBuffer(next, hmCodes.current);
+      if (r.kind === 'exact') {
+        setHmBuf('');
+        hitHint(r.code);
+        return;
+      }
+      if (r.kind === 'prefix') {
+        setHmBuf(next);
+        return;
+      }
+      setHmBuf('');
+      setNote('热键：没有「' + next + '」这一个');
+    };
+    // 捕获阶段：先于格子自己的键处理拿到这一下，才判得出该让位还是该吃掉。
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+    // 缓冲要跟着进依赖表：不进来的话这一串键读到的永远是第一下时的那个空串。
+  }, [hmOn, hmBuf, world, linkFrom, orderTarget, parentTarget, seatTarget, hitHint]);
+
+  /**
+   * 把标签挂上去。放在 layout effect 里：标签与表格同一帧出现，不会先闪一下没有标签的样子。
+   * 不给依赖表：行、页、排序、筛选一变，能按的地方就整批换了；这一遍只是走一遍这一页的元素。
+   * 引擎停在问答框上的时候不挂——那一段键属于那个框。
+   */
+  useLayoutEffect(() => {
+    const root = appRef.current;
+    if (root === null || !hmOn || world === null || world.pending !== null) return;
+    hmCodes.current = markHints(root, hmBuf);
+  });
+
+  // 换页签就把已经敲的那一截清掉：用鼠标点过去的时候，缓冲里不该还挂着上一页的那一个数字。
+  useEffect(() => {
+    setHmBuf('');
+  }, [view]);
+
+  /**
    * 正在挑目的地的那支部队要是驻军，它在地图上没有自己的记号，所以把「正在挑」那一圈
    * 套在它所在的那座据点上。
    */
@@ -1173,14 +1306,17 @@ export function App() {
   };
 
   return (
-    <div className="app">
+    <div className={'app' + (hmOn ? ' hm' : '') + (hmOn && hmMarks ? ' hm-marks' : '')} ref={appRef}>
       <header>
         <div className="row">
           <strong className="title">据点沙盘</strong>
           <span className="cal">{calendar}</span>
           <span className="dim">第 {day} 天</span>
-          <button onClick={() => setRunning((r) => !r)}>{running ? '暂停' : '自动走'}</button>
-          <label className="dim">
+          <button data-hint={TOP_CODES.run} onClick={() => setRunning((r) => !r)}>
+            {running ? '暂停' : '自动走'}
+          </button>
+          {/* 热键标签挂在 <label> 上，不挂在 <select> 上：下拉是替换元素，画不出 ::before。 */}
+          <label className="dim" data-hint={TOP_CODES.speed}>
             速度
             <select value={speed} onChange={(e) => setSpeed(Number(e.target.value))}>
               {SPEEDS.map((s) => (
@@ -1190,22 +1326,36 @@ export function App() {
               ))}
             </select>
           </label>
-          <button onClick={() => step(1)}>推进一天</button>
-          <button onClick={() => step(params.daysPerMonth)}>推进一月</button>
-          <button className="primary" onClick={() => void saveNow()}>
+          <button data-hint={TOP_CODES.day} onClick={() => step(1)}>
+            推进一天
+          </button>
+          <button data-hint={TOP_CODES.month} onClick={() => step(params.daysPerMonth)}>
+            推进一月
+          </button>
+          <button className="primary" data-hint={TOP_CODES.save} onClick={() => void saveNow()}>
             保存
           </button>
-          <button onClick={() => void takeSnapshot()}>快照</button>
+          <button data-hint={TOP_CODES.snapshot} onClick={() => void takeSnapshot()}>
+            快照
+          </button>
         </div>
         <div className="row tabs">
           {VIEWS.map((v) => (
-            <button key={v.id} className={view === v.id ? 'tab active' : 'tab'} onClick={() => setView(v.id)}>
+            <button
+              key={v.id}
+              className={view === v.id ? 'tab active' : 'tab'}
+              data-hint={v.code}
+              onClick={() => setView(v.id)}
+            >
               {v.label}
               {counts[v.id] > 0 ? <span className="dim"> {counts[v.id]}</span> : null}
             </button>
           ))}
           <span className="dim small push">新增连接：在「地图」页签点两个据点</span>
-          <button onClick={() => addSiteAt(Math.round(params.mapWidth / 2), Math.round(params.mapHeight / 2))}>
+          <button
+            data-hint={TOP_CODES.addSite}
+            onClick={() => addSiteAt(Math.round(params.mapWidth / 2), Math.round(params.mapHeight / 2))}
+          >
             新增据点
           </button>
         </div>
@@ -1351,6 +1501,15 @@ export function App() {
           </>
         )}
       </main>
+
+      {hmOn ? (
+        /* 模式的那一条：现在敲到哪儿了、还剩哪些键。点不到它（pointer-events: none），不挡鼠标。 */
+        <div className="hintbar">
+          <strong>热键</strong>
+          <kbd>{hmBuf === '' ? '等按键' : hmBuf}</kbd>
+          <span className="dim small">Esc 清空 · Backspace 退一格 · ` 隐/现 · Alt+K 退出</span>
+        </div>
+      ) : null}
 
       {world && world.pending ? (
         <AskBox key={world.pending.subject + world.pending.question} world={world} onAnswer={answer} />

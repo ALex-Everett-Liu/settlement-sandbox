@@ -419,3 +419,106 @@ input.bad {
   top: auto;
   bottom: 100%;
 }
+
+/* 热键模式。标签画在目标自己的角上，文字用 ::before 的 content 从属性里取：
+   固定那几层（页签、表上方、顶上、表头）取 data-hint，行首取 data-hintrow，展开那一行取 data-hint。
+   画不画由属性与 hint-digit / hint-on 两个 class 决定，标签本身一直留在元素上，
+   所以收起标签的时候按下去照样找得到那一处，不会出现「画的是这一层、认的是另一层」。 */
+.hm-marks [data-hint] {
+  position: relative;
+}
+
+.hm-marks [data-hint]::before {
+  content: attr(data-hint);
+  position: absolute;
+  left: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 0 3px;
+  border-radius: 3px;
+  background: #f3c969;
+  color: #241a06;
+  font: 600 10px/14px ui-monospace, Consolas, monospace;
+  pointer-events: none;
+  z-index: 3;
+}
+
+/* 行内那一层默认不画：空缓冲时画每行行首的数字，敲了数字之后只画那一行的字母。 */
+.hm-marks [data-hintrow]::before {
+  display: none;
+}
+
+.hm-marks [data-hintrow].hint-digit::before {
+  content: attr(data-hintrow);
+  display: block;
+}
+
+.hm-marks [data-hintrow].hint-on::before {
+  display: block;
+}
+
+/* 展开了一行之后，页签、表上方那一行、顶上那一排、表头的标签就不是这一步要按的东西了。 */
+.hm-marks [data-hintshow='off']::before {
+  display: none;
+}
+
+/* 不以已经敲下去那一截开头的标签淡下去：敲了 s，剩下的 si、st、sp、sv、sn 才亮着。 */
+.hm-marks .hint-dim::before {
+  opacity: 0.28;
+}
+
+/* 给标签让出地方，免得盖住格子里的数与按钮上的字。
+   输入件与下拉是替换元素，画不出伪元素，所以标签挂在它们的框上（格子的 <td>、挑名字那个 <div>、
+   页码那个 <span>、速度那个 <label>），这一条把框里的字往右挪一段。取色器那个小方块不挪。 */
+.hm-marks [data-hint] input:not([type='color']),
+.hm-marks [data-hint] textarea,
+.hm-marks td[data-hint] select {
+  padding-left: 22px;
+}
+
+.hm-marks button[data-hint] {
+  padding-left: 24px;
+}
+
+.hm-marks label[data-hint] {
+  padding-left: 24px;
+}
+
+/* 页码格外面那个让标签落脚的框：原来输入件直接摆在 .pager 里，现在多包一层。
+   只在标记开着的时候改成 inline-flex——平时它就是个普通的行内框，不动原来的排版。 */
+.hm-marks .pagefield {
+  display: inline-flex;
+}
+
+/* 模式那一条：屏幕底下居中，只说现在敲到哪儿了；它不接收鼠标，不挡底下的东西。 */
+.hintbar {
+  position: fixed;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  z-index: 9;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 5px 12px;
+  background: var(--field);
+  border: 1px solid var(--acc);
+  border-radius: 999px;
+  box-shadow: 0 6px 24px rgb(0 0 0 / 0.18);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.hintbar strong {
+  color: var(--acc);
+}
+
+.hintbar kbd {
+  min-width: 26px;
+  padding: 0 6px;
+  text-align: center;
+  border-radius: 3px;
+  background: #f3c969;
+  color: #241a06;
+  font: 600 12px/16px ui-monospace, Consolas, monospace;
+}

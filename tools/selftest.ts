@@ -21,6 +21,7 @@ import {
   tableRows,
 } from '../src/renderer/paging.ts';
 import type { Row } from '../src/renderer/paging.ts';
+import { expandRow, fixedCodes, headCode, letterAt, resolveBuffer, rowCode } from '../src/renderer/hotkeys.ts';
 import {
   addDivision,
   addFaction,
@@ -635,6 +636,39 @@ check(
   '默认每张表都在第 1 页、按编号升序',
   PAGE_LISTS.every((l) => listStates[l].page === 1 && listStates[l].sort.key === 'id' && listStates[l].sort.up),
 );
+
+console.log('\n== 热键 ==');
+const fixed = fixedCodes(10);
+check(
+  '固定码：九张页签 + 表上方七 + 顶上七 + 地图四个 + 表头十 = 三十七',
+  fixed.length === 37,
+  String(fixed.length),
+);
+check('固定码两两不同', new Set(fixed).size === fixed.length);
+check('固定码都是两位小写字母', fixed.every((c) => /^[a-z]{2}$/.test(c)));
+check(
+  '固定码之间没有一个是另一个的前缀',
+  fixed.every((a) => fixed.every((b) => a === b || !b.startsWith(a))),
+  fixed.join(' '),
+);
+check('第 1 行第 1 个口是 1a，第 10 行第 3 个是 10c', rowCode(1, 0) === '1a' && rowCode(10, 2) === '10c');
+check('行内码首字是数字、固定码首字是字母：两族不互相吞', /^\d/.test(rowCode(1, 0)) && fixed.every((c) => !/^\d/.test(c)));
+check('过 z 之后没有标签', letterAt(26) === '' && rowCode(1, 26) === '');
+check('表头第 1 列是 ha', headCode(0) === 'ha');
+const hmCodes = [...fixed, rowCode(1, 0), rowCode(1, 1), rowCode(2, 0), rowCode(10, 0)];
+check('空缓冲是「还没敲」', resolveBuffer('', hmCodes).kind === 'empty');
+check('敲满 si 正好是据点页签', resolveBuffer('si', hmCodes).kind === 'exact');
+check('敲了 s 算半截', resolveBuffer('s', hmCodes).kind === 'prefix');
+check('zz 没有这一个', resolveBuffer('zz', hmCodes).kind === 'none');
+check(
+  '敲了 1 算半截（1a 与 10a 都还开着），敲满 1a 才触发',
+  resolveBuffer('1', hmCodes).kind === 'prefix' && resolveBuffer('1a', hmCodes).kind === 'exact',
+);
+check('第 2 行只有 a、b 两个口时 2c 没有这一个', resolveBuffer('2c', hmCodes).kind === 'none');
+check('空缓冲不展开任何一行', expandRow('', 5) === 0);
+check('敲了 3 展开第 3 行', expandRow('3', 5) === 3);
+check('敲了 30 超出这一页的行数，不展开', expandRow('30', 5) === 0);
+check('字母不展开任何一行', expandRow('s', 5) === 0);
 
 console.log('\n== 存档往返 ==');
 const text = worldToJson(w4);

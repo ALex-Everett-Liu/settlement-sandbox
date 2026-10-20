@@ -7,6 +7,7 @@ import type { ReactNode } from 'react';
 import type { Link, Order, Site, Terrain, Unit, World } from '../engine/types.ts';
 import { colorRefusal, divisionName, factionColor, linkLength, normalizeColor, terrainLinks, terrainName } from '../engine/world.ts';
 import { cellText, factionName, garrisonText, orderText, placeText, round1, round2, siteName } from './format.ts';
+import { BAR_CODES } from './hotkeys.ts';
 import {
   DEFAULT_SORT,
   isPageNumber,
@@ -185,6 +186,7 @@ function SortButton({
   return (
     <button
       className={active ? 'tab active' : 'tab'}
+      data-hint={by === 'id' ? BAR_CODES.byId : BAR_CODES.byName}
       title={active ? '再点一下改成倒序' : '按这一项排；再点一下就改成倒序'}
       onClick={() => onSort({ key: by, up: active ? !sort.up : true })}
     >
@@ -210,36 +212,39 @@ export function Pager({ total, what, bar }: { total: number; what: string; bar: 
 
   return (
     <span className="row pager push">
-      <button onClick={() => bar.onPage(bar.page - 1)} disabled={bar.page <= 1}>
+      <button data-hint={BAR_CODES.prev} onClick={() => bar.onPage(bar.page - 1)} disabled={bar.page <= 1}>
         上一页
       </button>
-      <button onClick={() => bar.onPage(bar.page + 1)} disabled={bar.page >= pages}>
+      <button data-hint={BAR_CODES.next} onClick={() => bar.onPage(bar.page + 1)} disabled={bar.page >= pages}>
         下一页
       </button>
-      <input
-        className={bad ? 'bad' : undefined}
-        value={text}
-        title={'第几页：1 到 ' + String(pages) + ' 之间的整数，敲完按回车或点别处'}
-        onChange={(e) => {
-          const typed = e.target.value;
-          setDraft({ text: typed, at: bar.page });
-          if (isPageNumber(typed, pages)) {
-            bar.onPage(Number(typed));
-            return;
-          }
-          bar.onNote(
-            what + '：页码只收 1 到 ' + String(pages) + ' 之间的整数：' +
-              (typed.trim() === '' ? '格子还空着' : '「' + typed + '」跳不过去') +
-              '。共 ' + String(total) + ' 条。',
-          );
-        }}
-        onBlur={() => {
-          if (kept === null || isPageNumber(kept.text, pages)) setDraft(null);
-        }}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && isPageNumber(text, pages)) bar.onPage(Number(text));
-        }}
-      />
+      {/* 热键标签挂在外面这个 <span> 上，不挂在 <input> 上：输入件是替换元素，画不出 ::before 那个小签。 */}
+      <span className="pagefield" data-hint={BAR_CODES.page}>
+        <input
+          className={bad ? 'bad' : undefined}
+          value={text}
+          title={'第几页：1 到 ' + String(pages) + ' 之间的整数，敲完按回车或点别处'}
+          onChange={(e) => {
+            const typed = e.target.value;
+            setDraft({ text: typed, at: bar.page });
+            if (isPageNumber(typed, pages)) {
+              bar.onPage(Number(typed));
+              return;
+            }
+            bar.onNote(
+              what + '：页码只收 1 到 ' + String(pages) + ' 之间的整数：' +
+                (typed.trim() === '' ? '格子还空着' : '「' + typed + '」跳不过去') +
+                '。共 ' + String(total) + ' 条。',
+            );
+          }}
+          onBlur={() => {
+            if (kept === null || isPageNumber(kept.text, pages)) setDraft(null);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && isPageNumber(text, pages)) bar.onPage(Number(text));
+          }}
+        />
+      </span>
       <span className="dim small">
         第 {bar.page} / {pages} 页 · 共 {total} 条
       </span>
@@ -421,6 +426,8 @@ interface NamePickerProps {
   emptyPick?: PickItem;
   /** 按回车或点候选时才调它，参数是挑中的那一条。 */
   onPick: (item: PickItem) => void;
+  /** 热键标签。只有「表上方那一行」里那个筛选要传：行内的标签由 markHints 按位置挂。 */
+  hint?: string;
 }
 
 /**
@@ -432,7 +439,7 @@ interface NamePickerProps {
  * 所以键盘这条路全靠输入框自己在 `onKeyDown` 里处理，鼠标那条靠 `onMouseDown`
  * 挡住焦点转移（不然一点候选，输入框先失焦、列表先没了）。
  */
-function NamePicker({ value, items, label, emptyPick, onPick }: NamePickerProps) {
+function NamePicker({ value, items, label, emptyPick, onPick, hint }: NamePickerProps) {
   const [draft, setDraft] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   // 格子下面放不下候选列表时就改成往上展开。
@@ -480,7 +487,8 @@ function NamePicker({ value, items, label, emptyPick, onPick }: NamePickerProps)
   };
 
   return (
-    <div className="picker">
+    /* 热键标签挂在这个 <div> 上（它本来就是候选列表的定位框），不挂在 <input> 上：输入件画不出 ::before。 */
+    <div className="picker" data-hint={hint}>
       <input
         ref={inputRef}
         className={bad ? 'bad' : undefined}
@@ -653,7 +661,7 @@ export function FactionTable({ world, bar, onRename, onColor, onDelete, onAdd }:
       <tfoot>
         <tr>
           <td colSpan={9}>
-            <button onClick={onAdd}>＋ 新增势力</button>
+            <button data-hint={BAR_CODES.add} onClick={onAdd}>＋ 新增势力</button>
           </td>
         </tr>
       </tfoot>
@@ -716,6 +724,7 @@ export function SiteTable({
     <>
       <ListBar total={total} what="据点表" bar={bar}>
         <NamePicker
+          hint={BAR_CODES.filter}
           value={only === null ? '' : only.name}
           items={[
             { id: 0, name: '全部' },
@@ -1066,7 +1075,7 @@ export function DivisionTable({
       <tfoot>
         <tr>
           <td colSpan={12}>
-            <button onClick={onAdd}>＋ 新增辖区</button>
+            <button data-hint={BAR_CODES.add} onClick={onAdd}>＋ 新增辖区</button>
           </td>
         </tr>
       </tfoot>
@@ -1224,7 +1233,7 @@ export function UnitTable({
                   <span className="dim small">（它的势力就是那座据点的势力）</span>
                 </>
               )}
-              <button onClick={() => onAdd(birthSite === null ? 0 : birthSite.id)}>＋ 新增部队</button>
+              <button data-hint={BAR_CODES.add} onClick={() => onAdd(birthSite === null ? 0 : birthSite.id)}>＋ 新增部队</button>
             </div>
           </td>
         </tr>
@@ -1410,7 +1419,7 @@ export function TerrainTable({ world, bar, onEdit, onDelete, onAdd }: TerrainTab
       <tfoot>
         <tr>
           <td colSpan={7}>
-            <button onClick={onAdd}>＋ 新增地貌</button>
+            <button data-hint={BAR_CODES.add} onClick={onAdd}>＋ 新增地貌</button>
           </td>
         </tr>
       </tfoot>

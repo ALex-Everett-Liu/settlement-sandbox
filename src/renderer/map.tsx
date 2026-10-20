@@ -7,6 +7,7 @@ import { mulberry32 } from '../engine/rng.ts';
 import type { Id, Params, Site, Theme, Unit, World } from '../engine/types.ts';
 import { colorNumber, factionColor, siteGarrison, unitPoint } from '../engine/world.ts';
 import { factionName, garrisonText, placeText, round1, round2 } from './format.ts';
+import { MAP_CODES } from './hotkeys.ts';
 
 /** 生成地形用的固定种子：同一份参数每次生成出同一张图。 */
 const TERRAIN_SEED = 20261011;
@@ -846,13 +847,13 @@ export function MapView({
         </div>
       </div>
       <div className="mapbar">
-        <button onClick={() => actionsRef.current?.zoomBy(1.5)}>放大</button>
-        <button onClick={() => actionsRef.current?.zoomBy(1 / 1.5)}>缩小</button>
-        <button onClick={() => actionsRef.current?.fit()}>缩到全图</button>
+        <button data-hint={MAP_CODES.zoomIn} onClick={() => actionsRef.current?.zoomBy(1.5)}>放大</button>
+        <button data-hint={MAP_CODES.zoomOut} onClick={() => actionsRef.current?.zoomBy(1 / 1.5)}>缩小</button>
+        <button data-hint={MAP_CODES.fit} onClick={() => actionsRef.current?.fit()}>缩到全图</button>
         <span className="dim small">
           缩放 {view.zoom.toFixed(3)} · 1 像素 = {(1 / view.zoom).toFixed(1)} 地图单位
         </span>
-        <label className="dim small">
+        <label className="dim small" data-hint={MAP_CODES.terrain}>
           <input type="checkbox" checked={showTerrain} onChange={(e) => setShowTerrain(e.target.checked)} /> 生成的地形层
         </label>
         <span className="dim small">
