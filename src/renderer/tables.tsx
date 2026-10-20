@@ -119,6 +119,12 @@ export function NumberCell({
 const NO_PARENT = '（无）';
 
 /**
+ * 挑名字时一屏显示几条候选。六条够看清、也不会把表格盖住一大片；
+ * 命中更多时窗口跟着 ↑↓ 往后挪，底下写「下面还有 N 个」。
+ */
+const PICKER_PAGE = 6;
+
+/**
  * 删除按钮。要按两下：第一下把按钮换成「确认删除」，焦点离开就收回。
  * 挡路的情况由调用方判——按了第二下也可能什么也没删，说明行会写清楚挡在哪一条。
  */
@@ -418,14 +424,22 @@ interface NamePickerProps {
 }
 
 /**
- * 按名字挑一个东西：敲名字只用来过滤，写回发生在按回车（与某一条的名字完全相同，
- * 且这样的只有一条）或点候选的时候。几百个势力或据点时下拉挑不动，敲两三个字就缩到一两条。
+ * 按名字挑一个东西：敲名字只用来过滤，写回有两条路——**按回车**（挑中高亮的候选；
+ * 没有高亮时仍走「与某一条的名字完全相同、且这样的只有一条」）或者**点候选**。
+ * 几百个势力或据点时下拉挑不动，敲两三个字就缩到一两条。
+ * 键盘：↑↓ 移动高亮（能一路走到全部候选，窗口自己往后挪），Esc 收起，Tab 离开这一格。
+ * 候选是真 `<button>`，但用 Tab 走不进去——输入框一失焦列表就收起来了；
+ * 所以键盘这条路全靠输入框自己在 `onKeyDown` 里处理，鼠标那条靠 `onMouseDown`
+ * 挡住焦点转移（不然一点候选，输入框先失焦、列表先没了）。
  */
 function NamePicker({ value, items, label, emptyPick, onPick }: NamePickerProps) {
   const [draft, setDraft] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   // 格子下面放不下候选列表时就改成往上展开。
   const [up, setUp] = useState(false);
+  // 高亮的是命中里第几条（-1 表示没有高亮），以及窗口从第几条开始显示。
+  const [active, setActive] = useState(-1);
+  const [win, setWin] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const text = draft === null ? value : draft;
   const typed = text.trim();
@@ -434,14 +448,35 @@ function NamePicker({ value, items, label, emptyPick, onPick }: NamePickerProps)
   const only = exact.length === 1 ? exact[0] : undefined;
   // 只有 User 自己往里敲过字才判对错：一条都对不上、或者对上不止一条（同名）都算没挑定，
   // 字留在格子里并把格子标红。draft 是 null 表示这一格没在改，那时不判——挂着的本来就可能是个重名的名字。
-  const bad = draft !== null && typed !== '' && only === undefined;
+  // 已经高亮了某一条就不算错：那一条按下回车就写回。
+  const bad = draft !== null && typed !== '' && only === undefined && active < 0;
   const hits = typed === '' ? items : items.filter((i) => i.name.includes(typed));
-  const shown = hits.slice(0, 6);
+  // 一屏六条；高亮走到窗口外面时把窗口挪过去，于是 ↑↓ 能一路走完全部候选。
+  const maxWin = Math.max(0, hits.length - PICKER_PAGE);
+  const start = Math.min(win, maxWin);
+  const shown = hits.slice(start, start + PICKER_PAGE);
+  const above = start;
+  const below = hits.length - (start + shown.length);
 
-  /** 只有按回车（同名只有一个）或点候选才走到这里。 */
+  /** 只有按回车或点候选才走到这里。 */
   const commit = (item: PickItem) => {
     onPick(item);
     setDraft(null);
+    setActive(-1);
+  };
+
+  /** 把高亮挪到第 i 条（-1 到 hits.length-1），顺便把窗口挪到能看见它。 */
+  const move = (i: number) => {
+    const n = Math.max(-1, Math.min(hits.length - 1, i));
+    setActive(n);
+    if (n >= 0) {
+      setWin((w) => {
+        const from = Math.min(w, maxWin);
+        if (n < from) return n;
+        if (n >= from + PICKER_PAGE) return n - PICKER_PAGE + 1;
+        return from;
+      });
+    }
   };
 
   return (
@@ -464,24 +499,49 @@ function NamePicker({ value, items, label, emptyPick, onPick }: NamePickerProps)
           setUp(el !== null && window.innerHeight - el.getBoundingClientRect().bottom < 200);
           setOpen(true);
         }}
-        onBlur={() => setOpen(false)}
-        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => {
+          setOpen(false);
+          setActive(-1);
+        }}
+        onChange={(e) => {
+          setDraft(e.target.value);
+          // 字一变，命中就变了：高亮归零、窗口挪回最前面。
+          setActive(-1);
+          setWin(0);
+        }}
         onKeyDown={(e) => {
           if (e.key === 'Enter') {
-            if (typed === '' && emptyPick !== undefined) commit(emptyPick);
+            const picked = active >= 0 ? hits[active] : undefined;
+            if (picked !== undefined) commit(picked);
+            else if (typed === '' && emptyPick !== undefined) commit(emptyPick);
             else if (only !== undefined) commit(only);
+          } else if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            if (!open) setOpen(true);
+            move(active < 0 ? 0 : active + 1);
+          } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            if (!open) setOpen(true);
+            move(active < 0 ? 0 : active - 1);
           } else if (e.key === 'Escape') {
             setDraft(null);
             setOpen(false);
+            setActive(-1);
+            setWin(0);
           }
         }}
       />
       {open ? (
         <div className={up ? 'picklist up' : 'picklist'}>
-          {shown.map((item) => (
+          {above > 0 ? (
+            <span className="more dim small">上面还有 {above} 个</span>
+          ) : null}
+          {shown.map((item, i) => (
             <button
               key={item.id}
+              className={start + i === active ? 'on' : undefined}
               onMouseDown={(e) => e.preventDefault()}
+              onMouseEnter={() => setActive(start + i)}
               onClick={() => {
                 commit(item);
                 setOpen(false);
@@ -494,8 +554,8 @@ function NamePicker({ value, items, label, emptyPick, onPick }: NamePickerProps)
               {item.tag === undefined ? null : <span className="tag"> {item.tag}</span>}
             </button>
           ))}
-          {hits.length > shown.length ? (
-            <span className="more dim small">还有 {hits.length - shown.length} 个</span>
+          {below > 0 ? (
+            <span className="more dim small">下面还有 {below} 个</span>
           ) : null}
           {shown.length === 0 ? <span className="more dim small">没有这个{label}</span> : null}
         </div>

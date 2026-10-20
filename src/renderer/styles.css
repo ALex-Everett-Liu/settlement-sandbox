@@ -392,6 +392,11 @@ tfoot button {
   background: var(--head);
 }
 
+/* 键盘高亮的那一条（↑↓ 走到哪儿，哪一条亮）。与 :hover 同一个底色，两者谁最后设谁算。 */
+.picklist button.on {
+  background: var(--head);
+}
+
 .picklist .more {
   padding: 3px 7px;
   white-space: nowrap;
