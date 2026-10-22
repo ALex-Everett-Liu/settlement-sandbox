@@ -21,7 +21,7 @@ import type { OnlyBranch, PageList, Row, Sort } from './paging.ts';
 
 /**
  * 地貌那四个数各自的上下限、小数位与中文名。越界的写法一律挡回来（见 App 的 terrainRefusal），
- * 由界面把理由写进说明行，等 User 自己改一个数——不夹到边界。
+ * 由界面把理由写进说明行，等 User 自己改一个数——`world.db` 里那个数不变，也不把它改成上限或下限。
  * 小数位不设限：`step` 一律 0.01，两位小数随便填（原先只留一位，山地 0.55 会被显示成 0.6）。
  * 速度系数的下限是 0.01 而不是 0：0 或负数会让行军天数变成无穷，部队就永远走不到，不声不响地卡住。
  */
@@ -53,7 +53,7 @@ function inRange(text: string, min: number | undefined, max: number | undefined)
 
 /**
  * 数字格：只有落进 [min, max] 的数才写回世界（上下限不给就是不限）。写不进去的值留在格子里并标红，
- * 由 onNote 报一句，等 User 自己改回来——不夹到边界，也不替 User 改数。
+ * 由 onNote 报一句，等 User 自己改回来——`world.db` 里那个数不变，也不替 User 改成上限或下限。
  * 草稿在输入期间一直留着（不然敲「12.」时最后那个小数点会被顶掉），焦点离开时才与世界的值对齐；
  * 越界的草稿离开焦点也留着，直到改成一个写得回去的数。
  */
@@ -583,7 +583,7 @@ interface FactionTableProps {
   bar: ListBarProps;
   /** 改名字：与别的表一样就地改，等月末那一次自动保存。 */
   onRename: (id: number, name: string) => void;
-  /** 改颜色：写法不对由 App 挡回来，值一个也不动。 */
+  /** 改颜色：写法不对时 App 拒绝，`world.db` 里那个颜色不变。 */
   onColor: (id: number, color: string) => void;
   /** 点「删除」（第二下）：名下还挂着据点或部队就会被挡回来，说明行写清楚还挂着多少。 */
   onDelete: (id: number) => void;

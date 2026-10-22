@@ -62,7 +62,7 @@ const api = (window as unknown as { sandbox?: SandboxApi }).sandbox;
 const SPEEDS = [1, 2, 4, 8, 16];
 
 /**
- * 两个有上下限的据点字段。写不回去就返回理由：值一个也不动，更不夹到边界——
+ * 两个有上下限的据点字段。写不回去就返回理由：`world.db` 里那个数不变，也不把它改成上限或下限——
  * 由界面把理由写进说明行，等 User 自己改一个数。
  */
 function siteNumberRefusal(patch: Partial<Site>): string | null {
@@ -75,7 +75,7 @@ function siteNumberRefusal(patch: Partial<Site>): string | null {
   return null;
 }
 
-/** 地貌那四个数各自的范围。写不回去就返回理由：值一个也不动，更不夹到边界。 */
+/** 地貌那四个数各自的范围。写不回去就返回理由：`world.db` 里那个数不变，也不把它改成上限或下限。 */
 function terrainRefusal(patch: Partial<Terrain>): string | null {
   for (const key of ['speed', 'width', 'defense', 'food'] as const) {
     const v = patch[key];
@@ -664,7 +664,7 @@ export function App() {
   );
 
   /**
-   * 势力表里改颜色：只收 `#rrggbb`（由引擎的 colorRefusal 判），写不回去就报一句、值一个也不动。
+   * 势力表里改颜色：只收 `#rrggbb`（由引擎的 colorRefusal 判），写不回去就报一句，`world.db` 里那个颜色不变。
    * 同色不挡——附庸用宗主色、同阵营用一套色都是常有的事——写回后在说明行里把同名的那几家念出来。
    */
   const editFactionColor = useCallback(
