@@ -260,7 +260,7 @@ export function App() {
         if (!alive) return;
         worldRef.current = w;
         setWorld({ ...w });
-        setNote(loaded ? '读到了已有的数据' : '库里是空的：建了一份初始数据并写进去');
+        setNote(loaded ? '读到了已有的数据' : 'world.db 里是空的：建了一份初始数据并写进去');
       } catch (e) {
         if (alive) setNote('启动失败：' + String(e));
       }

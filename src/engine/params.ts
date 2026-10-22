@@ -40,7 +40,7 @@ export const DEFAULT_PARAMS: Params = {
   zoomMax: 6,
 
   /**
-   * 六张表与日志每页几条。界面读它，引擎不读。旧库里没有这一项，打开时按默认值补上
+   * 六张表与日志每页几条。界面读它，引擎不读。旧的 `world.db` 里没有这一项，打开时按默认值补上
    * （`fillParamsGaps`），所以不用升 schema。
    */
   pageSize: 50,

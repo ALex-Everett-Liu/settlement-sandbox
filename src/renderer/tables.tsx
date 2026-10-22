@@ -364,7 +364,7 @@ function ColorCell({
   const [draft, setDraft] = useState<string | null>(null);
   const text = draft ?? value;
   const bad = draft !== null && colorRefusal(draft) !== null;
-  // 库里存的一定是收下的那个写法；万一不是（手改过的库），系统取色器要一个能用的值。
+  // `world.db` 里一定保存着收下的那个写法；万一不是（手改过的库），系统取色器要一个能用的值。
   const picker = colorRefusal(value) === null ? value : '#000000';
 
   return (

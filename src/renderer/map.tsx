@@ -84,7 +84,7 @@ function px(scene: Scene, screenPx: number): number {
 }
 
 /**
- * 某个势力在画布上的颜色。势力没有颜色、编号指不到、或者库里那个写法读不出来时给 null，
+ * 某个势力在画布上的颜色。势力没有颜色、编号指不到、或者 `world.db` 里那个写法读不出来时给 null，
  * 由调用方退回各自的默认色（据点用成色、部队用蓝色、连线用灰色）——地图不许因为一个坏值就画不出来。
  */
 function factionColorNumber(world: World, id: Id): number | null {

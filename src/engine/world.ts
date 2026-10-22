@@ -41,7 +41,7 @@ export function colorRefusal(text: string): string | null {
   return null;
 }
 
-/** 把这个颜色折成库里那一种写法（去掉两头空白、一律小写）。写对了才调它。 */
+/** 把这个颜色折成 `world.db` 里那一种写法（去掉两头空白、一律小写）。写对了才调它。 */
 export function normalizeColor(text: string): string {
   return text.trim().toLowerCase();
 }
@@ -272,7 +272,7 @@ export function destinationName(world: World, toSite: Id | null, x: number, y: n
 
 /**
  * 把 id 挂到 parent 下面会不会成环：沿上级一路往上，能走回 id 就会。
- * seen 记走过的据点：库里要是已经有一个环，也不再绕圈，直接当成会成环挡回去。
+ * seen 记走过的据点：`world.db` 里要是已经有一个环，也不再绕圈，直接当成会成环挡回去。
  */
 export function parentWouldCycle(world: World, id: Id, parent: Id): boolean {
   let cur: Id | null = parent;
@@ -338,9 +338,9 @@ function childrenIndex(sites: Array<{ id: Id; parent: Id | null }>): Map<Id, Id[
 
 /**
  * 按「没有下级就是第 0 层，否则是下级里最高那一档加一」算每个据点的层级。
- * 层级本身由 User 声明、存在 `Site.level` 里；这个算式只剩一个用处：库里升到 v4 时
+ * 层级本身由 User 声明、保存在 `Site.level` 里；这个算式只剩一个用处：`world.db` 升到 v4 时
  * 给新字段一个初值（以及自检）。界面不再按它算记号。
- * 走过的不再重算；库里要是有一个环，也不会绕个没完。
+ * 走过的不再重算；`world.db` 里要是有一个环，也不会绕个没完。
  */
 export function levelsFromParents(sites: Array<{ id: Id; parent: Id | null }>): Map<Id, number> {
   const children = childrenIndex(sites);

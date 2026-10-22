@@ -18,7 +18,7 @@ export interface SandboxApi {
   loadWorld(): Promise<World | null>;
   /** 整份世界写回。 */
   saveWorld(world: World): Promise<boolean>;
-  /** 读参数表；库里没有就返回 null。 */
+  /** 读参数表；`world.db` 里没有就返回 null。 */
   loadParams(): Promise<Params | null>;
   /** 整份参数表写回。 */
   saveParams(params: Params): Promise<boolean>;

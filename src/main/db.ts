@@ -61,7 +61,7 @@ export function openWorldDb(path: string): DatabaseSync {
   db.exec(SCHEMA);
   const row = db.prepare('SELECT v FROM meta WHERE k = ?').get('schema_version') as { v?: string } | undefined;
   if (!row) {
-    // 全新的库：这里特意不写 initialized，主进程据此知道「这个库里还没有世界」，
+    // 全新的库：这里特意不写 initialized，主进程据此知道「这一个 `world.db` 里还没有世界」，
     // 交给界面去建最小世界。写过一次之后由 saveWorld 补上标记。
     db.prepare('INSERT INTO meta (k, v) VALUES (?, ?)').run('schema_version', String(SCHEMA_VERSION));
     db.prepare('INSERT INTO meta (k, v) VALUES (?, ?)').run('day', '0');
@@ -73,14 +73,14 @@ export function openWorldDb(path: string): DatabaseSync {
     throw new Error('存档的 schema 版本是 ' + String(row.v) + '，本程序认的是 ' + String(SCHEMA_VERSION));
   }
   if (from < SCHEMA_VERSION) migrate(db, path, from);
-  // 这个标记是后加的：以前写下的库没有它，但那些库里已经有世界了（哪怕是个空世界），
+  // 这个标记是后加的：以前写下的库没有它，但那些 `world.db` 里已经有世界了（哪怕是个空世界），
   // 打开一次就补上，免得被当成新库、又被最小世界盖掉。
   if (metaGet(db, 'initialized') === undefined) metaSet(db, 'initialized', '1');
   return db;
 }
 
 /**
- * 库里有没有世界。只有全新的库才没有——一份零据点、零势力的世界也算有。
+ * `world.db` 里有没有世界。只有全新的库才没有——一份零据点、零势力的世界也算有。
  * 判据不能是「有没有据点」：那样一清空世界，下次开就被最小世界盖掉了。
  */
 export function hasWorld(db: DatabaseSync): boolean {
@@ -234,7 +234,7 @@ function hasColumn(db: DatabaseSync, table: string, column: string): boolean {
   return rows.some((r) => r.name === column);
 }
 
-/** 这一列在库里是什么类型（大写）。判断该不该重建那张表时用它。 */
+/** 这一列在 `world.db` 里是什么类型（大写）。判断该不该重建那张表时用它。 */
 function columnType(db: DatabaseSync, table: string, column: string): string {
   const rows = db.prepare("SELECT name, type FROM pragma_table_info('" + table + "')").all() as Array<{
     name: string;
@@ -289,7 +289,7 @@ export function fillParamsGaps(db: DatabaseSync, fallback: Params): string[] {
 }
 
 /**
- * 位置拆成库里那几列。每一档只用得上其中几列，其余一律写 null。
+ * 位置拆成 `world.db` 里那几列。每一档只用得上其中几列，其余一律写 null。
  * `place_site` 的含义是「这个位置关联的那座据点」：在据点里就是那座据点，
  * 离开道路而目的地是据点时就是目的据点，其余为空。
  */

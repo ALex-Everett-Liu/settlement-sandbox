@@ -76,7 +76,7 @@ function registerIpc(): void {
     return dbFile;
   });
   ipcMain.handle(IPC.loadWorld, () => {
-    // 判据是「这个库里写过世界没有」，不是「有没有据点」：零据点的世界照样读得回来。
+    // 判据是「这一个 `world.db` 里写过世界没有」，不是「有没有据点」：零据点的世界照样读得回来。
     const d = ensureDb();
     return hasWorld(d) ? loadWorld(d) : null;
   });
