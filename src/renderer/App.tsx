@@ -169,7 +169,7 @@ export function App() {
   const [speed, setSpeed] = useState(2);
   const [view, setView] = useState<View>('sites');
   const [dbPath, setDbPath] = useState('（还不知道）');
-  const [note, setNote] = useState('正在打开世界库…');
+  const [note, setNote] = useState('正在打开存档…');
   // 正在挑的起点据点：0 表示还没挑。挑法是在地图上点据点，见 MapView 的 onPickSite。
   const [linkFrom, setLinkFrom] = useState(0);
   // 正在挑目的地的那支部队：0 表示没有。与起点共用地图上那一次点选。
@@ -260,7 +260,7 @@ export function App() {
         if (!alive) return;
         worldRef.current = w;
         setWorld({ ...w });
-        setNote(loaded ? '读到了已有的世界' : '库里是空的：建了一个最小世界并写进去');
+        setNote(loaded ? '读到了已有的数据' : '库里是空的：建了一份初始数据并写进去');
       } catch (e) {
         if (alive) setNote('启动失败：' + String(e));
       }
@@ -1359,13 +1359,13 @@ export function App() {
             新增据点
           </button>
         </div>
-        <div className="dim small">世界库：{dbPath}</div>
+        <div className="dim small">存档文件：{dbPath}</div>
         <div className="dim small">{note}</div>
       </header>
 
       <main>
         {!world ? (
-          <p className="dim">世界还没读进来。</p>
+          <p className="dim">数据还没读进来。</p>
         ) : (
           <>
             {/* 地图常驻：切页签只是把它藏起来，场景与视图（倍数、位置）都留着。 */}

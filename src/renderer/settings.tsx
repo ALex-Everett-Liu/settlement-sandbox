@@ -45,7 +45,7 @@ export function SettingsView({ world, params, theme, onChange, onNote }: Setting
   return (
     <div>
       <p className="dim small">
-        这里的每一项都随世界存在库里，改完立刻写回去。滚轮与「放大」「缩小」不越过倍数上下界；「缩到全图」不受下界限制，所以地图很大时它会落在下界以下。
+        这里的每一项都存在 world.db 里，改完立刻写回去。滚轮与「放大」「缩小」不越过倍数上下界；「缩到全图」不受下界限制，所以地图很大时它会落在下界以下。
       </p>
       <table>
         <thead>
@@ -74,7 +74,7 @@ export function SettingsView({ world, params, theme, onChange, onNote }: Setting
                 </button>
               </div>
             </td>
-            <td className="ro">两套配色都存在世界库里，跟着这个世界走。</td>
+            <td className="ro">两套配色也存在 world.db 里。</td>
           </tr>
           <tr>
             <td className="ro">地图宽</td>

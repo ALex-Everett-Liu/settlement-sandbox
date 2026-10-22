@@ -30,7 +30,7 @@ function ensureDb(): DatabaseSync {
   fs.mkdirSync(dir, { recursive: true });
   dbFile = path.join(dir, 'world.db');
   db = openWorldDb(dbFile);
-  console.log('[sandbox] 世界库：' + dbFile);
+  console.log('[sandbox] 存档文件：' + dbFile);
 
   // The params table gains fields over versions; an older database is missing some.
   const filled = fillParamsGaps(db, DEFAULT_PARAMS);
@@ -110,7 +110,7 @@ app.whenReady().then(() => {
 });
 
 app.on('before-quit', () => {
-  console.log('[sandbox] before-quit：关闭世界库');
+  console.log('[sandbox] before-quit：关闭存档');
   if (db) {
     db.close();
     db = null;
