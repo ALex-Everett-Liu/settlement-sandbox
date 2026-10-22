@@ -1144,7 +1144,7 @@ export function App() {
       setHmBuf('');
       setNote('热键：没有「' + next + '」这一个');
     };
-    // 捕获阶段：先于格子自己的键处理拿到这一下，才判得出该让位还是该吃掉。
+    // 捕获阶段：先于格子自己的键处理接到这一下，才判得出是让位、还是由热键模式自己处理。
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
     // 缓冲要跟着进依赖表：不进来的话这一串键读到的永远是第一下时的那个空串。

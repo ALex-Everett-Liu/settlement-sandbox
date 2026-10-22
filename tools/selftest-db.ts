@@ -344,7 +344,7 @@ const facRows = up8.prepare('SELECT id, name, color FROM factions ORDER BY id').
   color: string;
 }>;
 check(
-  '颜色按编号顺次发：魏第一个、蜀第二个、吴第三个',
+  '颜色按编号排好顺序选取：魏第一个、蜀第二个、吴第三个',
   facRows[0]?.color === FACTION_COLORS[0] &&
     facRows[1]?.color === FACTION_COLORS[1] &&
     facRows[2]?.color === FACTION_COLORS[2],

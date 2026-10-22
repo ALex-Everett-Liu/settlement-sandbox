@@ -178,13 +178,13 @@ function migrate(db: DatabaseSync, dbPath: string, from: number): void {
       }
     }
     if (from < 9) {
-      // 势力多一个颜色：先按内置色板给现有的按编号顺次发一个，之后由 User 在势力表里自己改。
+      // 势力多一个颜色：先按内置色板给现有的按编号排好顺序、各选取一个，之后由 User 在势力表里自己改。
       if (!hasColumn(db, 'factions', 'color')) {
         db.exec("ALTER TABLE factions ADD COLUMN color TEXT NOT NULL DEFAULT '#dc2626'");
         const rows = db.prepare('SELECT id FROM factions ORDER BY id').all() as Array<{ id: number }>;
         const setColor = db.prepare('UPDATE factions SET color = ? WHERE id = ?');
         rows.forEach((r, i) => setColor.run(FACTION_COLORS[i % FACTION_COLORS.length]!, Number(r.id)));
-        steps.push('factions 加 color，按编号从内置色板发一个（' + String(rows.length) + ' 个势力）');
+        steps.push('factions 加 color，按编号排好顺序选取（' + String(rows.length) + ' 个势力）');
       }
     }
     if (from < 7) {

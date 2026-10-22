@@ -15,16 +15,17 @@ function nextId(list: { id: Id }[]): Id {
 }
 
 /**
- * 内置色板：新势力按当前势力数顺次取一个，取完从头循环。十二个色相绕一圈，明度都在中段——
+ * 内置色板：新势力从这十二个里选取哪一个，由当前势力个数决定，到第十二个之后又从头开始。
+ * 十二个色相绕一圈，明度都在中段——
  * 浅色底（#f6f7f9）与深色底（#0f1317）上同一个值都还读得出来（User 定的是「一个颜色，
- * 浅深两套主题共用」）。旧库升级时也按编号顺次发；之后 User 想在势力表里改成什么都行。
+ * 浅深两套主题共用」）。旧库升级时也按编号排好顺序选取；之后 User 想在势力表里改成什么都行。
  */
 export const FACTION_COLORS: string[] = [
   '#dc2626', '#ea580c', '#ca8a04', '#65a30d', '#16a34a', '#0d9488',
   '#0891b2', '#2563eb', '#4f46e5', '#7c3aed', '#c026d3', '#e11d48',
 ];
 
-/** 新势力拿哪一个颜色：按现有势力个数顺次取。 */
+/** 新势力选取哪一个颜色：序号取现有势力的个数，到第十二个之后又从头开始。 */
 export function nextFactionColor(world: World): string {
   return FACTION_COLORS[world.factions.length % FACTION_COLORS.length]!;
 }
