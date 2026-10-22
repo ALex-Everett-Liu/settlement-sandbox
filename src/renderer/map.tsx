@@ -131,7 +131,7 @@ function scaleUnits(zoom: number): number {
   return pow * 10;
 }
 
-/** 把整张地图摆进画布：一进来的时候、以及按「缩到全图」都走这里。画布还没有尺寸就先不摆。 */
+/** 把整张地图摆进画布：一进来的时候、以及按「fit to canvas」都走这里。画布还没有尺寸就先不摆。 */
 function fitView(scene: Scene, params: Params): void {
   const { width, height } = scene.app.screen;
   if (width < 50 || height < 50) return;
@@ -578,7 +578,7 @@ export function MapView({
 
         const zoomAt = (sx: number, sy: number, factor: number) => {
           const before = toWorld(sx, sy);
-          // 上下界拦住滚轮与按钮，但不把当前倍数硬拽回来：地图很大时「缩到全图」会落在下界以下。
+          // 上下界拦住滚轮与按钮，但不把当前倍数硬拽回来：地图很大时「fit to canvas」会落在下界以下。
           const { zoomMin, zoomMax } = paramsRef.current;
           scene.zoom = Math.max(
             Math.min(zoomMin, scene.zoom),
@@ -847,14 +847,14 @@ export function MapView({
         </div>
       </div>
       <div className="mapbar">
-        <button data-hint={MAP_CODES.zoomIn} onClick={() => actionsRef.current?.zoomBy(1.5)}>放大</button>
-        <button data-hint={MAP_CODES.zoomOut} onClick={() => actionsRef.current?.zoomBy(1 / 1.5)}>缩小</button>
-        <button data-hint={MAP_CODES.fit} onClick={() => actionsRef.current?.fit()}>缩到全图</button>
+        <button data-hint={MAP_CODES.zoomIn} onClick={() => actionsRef.current?.zoomBy(1.5)}>zoom in</button>
+        <button data-hint={MAP_CODES.zoomOut} onClick={() => actionsRef.current?.zoomBy(1 / 1.5)}>zoom out</button>
+        <button data-hint={MAP_CODES.fit} onClick={() => actionsRef.current?.fit()}>fit to canvas</button>
         <span className="dim small">
           缩放 {view.zoom.toFixed(3)} · 1 像素 = {(1 / view.zoom).toFixed(1)} 地图单位
         </span>
         <label className="dim small" data-hint={MAP_CODES.terrain}>
-          <input type="checkbox" checked={showTerrain} onChange={(e) => setShowTerrain(e.target.checked)} /> 生成的地形层
+          <input type="checkbox" checked={showTerrain} onChange={(e) => setShowTerrain(e.target.checked)} /> terrain layer
         </label>
         <span className="dim small">
           看到 x {Math.round(view.x0)}..{Math.round(view.x1)} · y {Math.round(view.y0)}..{Math.round(view.y1)}

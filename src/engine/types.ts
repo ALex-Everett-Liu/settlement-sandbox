@@ -204,7 +204,7 @@ export interface Params {
   mapWidth: number;
   mapHeight: number;
   /**
-   * 缩放的上下界。滚轮与「放大」「缩小」不越过去；「缩到全图」不受它们限制，
+   * 缩放的上下界。滚轮与「zoom in」「zoom out」不越过去；「fit to canvas」不受它们限制，
    * 所以地图很大时它会落在下界以下——那时再往小里缩放仍会被挡住，往回缩放不受影响。
    */
   zoomMin: number;

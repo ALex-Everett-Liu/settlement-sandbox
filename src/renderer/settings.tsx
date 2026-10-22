@@ -45,7 +45,7 @@ export function SettingsView({ world, params, theme, onChange, onNote }: Setting
   return (
     <div>
       <p className="dim small">
-        这里的每一项都存在 world.db 里，改完立刻写回去。滚轮与「放大」「缩小」不越过倍数上下界；「缩到全图」不受下界限制，所以地图很大时它会落在下界以下。
+        这里的每一项都存在 world.db 里，改完立刻写回去。滚轮与「zoom in」「zoom out」不越过倍数上下界；「fit to canvas」不受下界限制，所以地图很大时它会落在下界以下。
       </p>
       <table>
         <thead>
@@ -123,7 +123,7 @@ export function SettingsView({ world, params, theme, onChange, onNote }: Setting
                 onNote={onNote}
               />
             </td>
-            <td className="ro">最多缩到这么小。地图一大，自适应倍数会比它更小，所以「缩到全图」不受它限制。</td>
+            <td className="ro">最多缩到这么小。地图一大，自适应倍数会比它更小，所以「fit to canvas」不受它限制。</td>
           </tr>
           <tr>
             <td className="ro">倍数上界</td>
@@ -164,7 +164,7 @@ export function SettingsView({ world, params, theme, onChange, onNote }: Setting
         </tbody>
       </table>
       <p className="dim small">
-        按当前窗口算，「缩到全图」会用大约 {fit.toFixed(4)} 倍。
+        按当前窗口算，「fit to canvas」会用大约 {fit.toFixed(4)} 倍。
       </p>
       <p className="dim small">
         {outside === 0
